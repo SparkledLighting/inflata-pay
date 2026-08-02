@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Home, ListChecks, SlidersHorizontal, Users, LogOut, AlertTriangle, Printer,
-  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, FileText
+  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, FileText, User
 } from 'lucide-react'
 
 /* ------------------------------ helpers ------------------------------ */
@@ -84,6 +84,14 @@ export default function App() {
     return d
   }
 
+  const saveSelf = async (profile) => {
+    const d = await mutate({ action: 'saveSelf', profile })
+    if (profile.pin && profile.pin !== pin) { setPin(profile.pin); localStorage.setItem(LS_PIN, profile.pin) }
+    if (user.includes('@') && profile.email) { const u = profile.email.trim().toLowerCase(); setUser(u); localStorage.setItem(LS_USER, u) }
+    else if (!user.includes('@') && profile.phone) { const u = profile.phone.replace(/\D/g, ''); if (u) { setUser(u); localStorage.setItem(LS_USER, u) } }
+    return d
+  }
+
   const logout = () => { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
   const switchUser = () => { localStorage.removeItem(LS_PIN); localStorage.removeItem(LS_USER); setPin(''); setUser(''); setData(null) }
 
@@ -92,7 +100,7 @@ export default function App() {
   else if (!data) body = <Login loading={loading} error={error} savedUser={user} onSwitchUser={switchUser}
     onSubmit={(u, p) => { setUser(u); setPin(p); load(p, u) }} />
   else if (data.role === 'owner') body = <OwnerApp data={data} mutate={mutate} reload={() => load()} say={say} openStub={setStub} />
-  else body = <EmployeeApp data={data} say={say} openStub={setStub} reload={() => load()} />
+  else body = <EmployeeApp data={data} say={say} openStub={setStub} reload={() => load()} saveSelf={saveSelf} />
 
   return (
     <div className="app">
@@ -191,21 +199,29 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
 
 /* ------------------------------ work summary ------------------------------ */
 function summaryGroups(items, labels) {
-  const g = {}
-  const add = (key, label, order, qty, amt) => {
-    if (!g[key]) g[key] = { label, order, qty: 0, amt: 0 }
-    g[key].qty += qty; g[key].amt += amt
+  const P = {
+    clean: { label: 'Units Cleaned', order: 1, qty: 0, amt: 0, kids: {} },
+    roll: { label: 'Units Rolled', order: 2, qty: 0, amt: 0 },
+    delivery: { label: 'Delivery Setups/Takedowns', order: 3, qty: 0, amt: 0 },
+    pickup: { label: 'Customer Pickup/Returns', order: 4, qty: 0, amt: 0 },
+    misc: { label: 'Misc. Hours', order: 5, qty: 0, amt: 0 },
   }
   items.forEach((i) => {
-    if (i.kind === 'clean') add('c:' + i.cat, 'Cleaned — ' + ((labels || {})[i.cat] || i.cat), 10, 1, i.amount)
-    else if (i.kind === 'roll') add('roll', 'Rolled', 20, 1, i.amount)
-    else if (i.kind === 'delivery') add('del', 'Delivery setup/takedowns', 30, i.qty, i.amount)
-    else if (i.kind === 'pickup') add('pu', 'Customer pickups/returns', 40, i.qty, i.amount)
-    else if (i.kind === 'hourly') add('hr', 'Hourly work', 50, i.qty, i.amount)
-    else add('flat', 'One-offs & adjustments', 60, 1, i.amount)
+    if (i.kind === 'clean') {
+      P.clean.qty += 1; P.clean.amt += i.amount
+      const k = i.cat || '?'
+      const c = P.clean.kids[k] = P.clean.kids[k] || { label: (labels || {})[k] || k, qty: 0, amt: 0 }
+      c.qty += 1; c.amt += i.amount
+    } else if (i.kind === 'roll') { P.roll.qty += 1; P.roll.amt += i.amount }
+    else if (i.kind === 'delivery') { P.delivery.qty += i.qty; P.delivery.amt += i.amount }
+    else if (i.kind === 'pickup') { P.pickup.qty += i.qty; P.pickup.amt += i.amount }
+    else { P.misc.qty += i.qty; P.misc.amt += i.amount }
   })
-  return Object.values(g).sort((a, b) => a.order - b.order || (a.label < b.label ? -1 : 1))
-    .map((x) => ({ ...x, amt: r2(x.amt) }))
+  return Object.values(P).filter((g) => g.qty > 0 || g.amt !== 0).sort((a, b) => a.order - b.order)
+    .map((g) => ({
+      label: g.label, qty: g.qty, amt: r2(g.amt),
+      children: g.kids ? Object.values(g.kids).sort((a, b) => (a.label < b.label ? -1 : 1)).map((c) => ({ ...c, amt: r2(c.amt) })) : [],
+    }))
 }
 
 function WorkSummary({ items, labels, title }) {
@@ -216,13 +232,24 @@ function WorkSummary({ items, labels, title }) {
     <div className="card">
       {title && <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>{title}</div>}
       {groups.map((gr) => (
-        <div className="list-item" key={gr.label} style={{ padding: '7px 2px' }}>
-          <div className="li-main"><div className="li-title" style={{ fontSize: 14 }}>{gr.label}</div></div>
-          <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
-            <span className="li-sub" style={{ minWidth: 28, textAlign: 'right' }}>×{gr.qty}</span>
-            <span className="li-amt" style={{ minWidth: 70, textAlign: 'right' }}>{$(gr.amt)}</span>
+        <React.Fragment key={gr.label}>
+          <div className="list-item" style={{ padding: '8px 2px' }}>
+            <div className="li-main"><div className="li-title" style={{ fontSize: 14.5 }}>{gr.label}</div></div>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
+              <span className="li-sub" style={{ minWidth: 28, textAlign: 'right', fontWeight: 700 }}>×{gr.qty}</span>
+              <span className="li-amt" style={{ minWidth: 70, textAlign: 'right' }}>{$(gr.amt)}</span>
+            </div>
           </div>
-        </div>
+          {(gr.children || []).map((c) => (
+            <div className="list-item" key={c.label} style={{ padding: '3px 2px 3px 16px', borderBottom: 'none' }}>
+              <div className="li-sub">· {c.label}</div>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
+                <span className="li-sub" style={{ minWidth: 28, textAlign: 'right' }}>×{c.qty}</span>
+                <span className="li-sub" style={{ minWidth: 70, textAlign: 'right' }}>{$(c.amt)}</span>
+              </div>
+            </div>
+          ))}
+        </React.Fragment>
       ))}
       <div className="list-item" style={{ padding: '9px 2px', borderTop: '1.5px solid var(--hairline)' }}>
         <div className="li-title">Total</div>
@@ -625,16 +652,21 @@ function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
               <div><div className="li-sub">PAID TO</div><div style={{ fontWeight: 800 }}>{employee}</div></div>
               <div style={{ textAlign: 'right' }}><div className="li-sub">PERIOD</div><div style={{ fontWeight: 800 }}>{fdate(periodStart)} – {fdate(periodEnd)}</div></div>
             </div>
-            <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: '.5px', color: 'var(--faint)', margin: '2px 0 6px' }}>WORK SUMMARY</div>
-            <table style={{ marginBottom: 14 }}>
+            <div className="stub-sec">WORK SUMMARY</div>
+            <table style={{ marginBottom: 4 }}>
               <thead><tr><th>TYPE</th><th className="tr">QTY</th><th className="tr">AMOUNT</th></tr></thead>
               <tbody>
                 {summaryGroups(items, data.labels).map((gr) => (
-                  <tr key={gr.label}><td>{gr.label}</td><td className="tr">{gr.qty}</td><td className="tr" style={{ fontWeight: 600 }}>{$(gr.amt)}</td></tr>
+                  <React.Fragment key={gr.label}>
+                    <tr><td style={{ fontWeight: 700 }}>{gr.label}</td><td className="tr" style={{ fontWeight: 700 }}>{gr.qty}</td><td className="tr" style={{ fontWeight: 700 }}>{$(gr.amt)}</td></tr>
+                    {(gr.children || []).map((c) => (
+                      <tr key={c.label} className="subrow"><td style={{ paddingLeft: 20 }}>· {c.label}</td><td className="tr">{c.qty}</td><td className="tr">{$(c.amt)}</td></tr>
+                    ))}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
-            <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: '.5px', color: 'var(--faint)', margin: '2px 0 6px' }}>DETAIL</div>
+            <div className="stub-sec">DETAIL</div>
             <table>
               <thead><tr><th>DATE</th><th>WORK</th><th className="tr">AMT</th></tr></thead>
               <tbody>
@@ -756,7 +788,7 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
 }
 
 /* ------------------------------ employee portal ------------------------------ */
-function EmployeeApp({ data, say, openStub }) {
+function EmployeeApp({ data, say, openStub, saveSelf }) {
   const [tab, setTab] = useState('home')
   const s = data.summary
   const t = todayISO()
@@ -814,10 +846,41 @@ function EmployeeApp({ data, say, openStub }) {
         </>
       )}
       {tab === 'board' && <BoardTab data={data} />}
+      {tab === 'profile' && <ProfileTab data={data} saveSelf={saveSelf} say={say} />}
       <div className="tabbar no-print">
         <TabBtn icon={<Home size={20} />} label="Home" on={tab === 'home'} onClick={() => setTab('home')} />
         <TabBtn icon={<ListChecks size={20} />} label="My work" on={tab === 'work'} onClick={() => setTab('work')} />
         <TabBtn icon={<Trophy size={20} />} label="Board" on={tab === 'board'} onClick={() => setTab('board')} />
+        <TabBtn icon={<User size={20} />} label="Profile" on={tab === 'profile'} onClick={() => setTab('profile')} />
+      </div>
+    </>
+  )
+}
+
+function ProfileTab({ data, saveSelf, say }) {
+  const [f, setF] = useState({ email: data.me.email || '', phone: data.me.phone || '', pin: '' })
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    if (f.pin && !/^\d{4}$/.test(f.pin)) { say('PIN must be 4 digits'); return }
+    setBusy(true)
+    try {
+      await saveSelf({ email: f.email, phone: f.phone, ...(f.pin ? { pin: f.pin } : {}) })
+      say('Profile saved'); setF({ ...f, pin: '' })
+    } catch (e) { say(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <>
+      <div className="section-title">Your profile</div>
+      <div className="card">
+        <div className="field"><label>Name</label><input value={data.me.name} disabled /></div>
+        <div className="field"><label>Email (paystubs go here)</label>
+          <input type="email" autoCapitalize="none" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+        <div className="field"><label>Phone</label>
+          <input type="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+        <div className="field"><label>New PIN (leave blank to keep current)</label>
+          <input inputMode="numeric" maxLength={4} placeholder="••••" value={f.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} /></div>
+        <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>Save changes</button>
+        <div className="muted mt8">Your email and phone are what you log in with — this device updates itself automatically after you save.</div>
       </div>
     </>
   )

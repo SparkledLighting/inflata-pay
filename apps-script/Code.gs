@@ -77,9 +77,12 @@ function doPost(e) {
     } else if (a === 'emailPaystub') {
       requireOwner_(isOwner);
       emailPaystub_(body.employee, body.periodStart, body.periodEnd, body.paymentId);
+    } else if (a === 'saveSelf') {
+      saveSelf_(emp, body.profile || {});
     } else if (a !== 'ping') {
       throw new Error('Unknown action: ' + a);
     }
+    emp = readEmployees_().find(function (x) { return x.name === emp.name; }) || emp;
     return buildPayload_(emp);
   });
 }
@@ -380,7 +383,7 @@ function buildPayload_(emp) {
   var base = {
     role: emp.role,
     labels: priced.rates.labels,
-    me: { name: emp.name, email: emp.email },
+    me: { name: emp.name, email: emp.email, phone: emp.phone },
     leaderboard: lb,
     serverTime: fmtDate_(new Date()),
   };
@@ -444,6 +447,17 @@ function saveEmployee_(e) {
   else sh.appendRow(row);
 }
 
+function saveSelf_(emp, p) {
+  var sh = sheet_(TAB.EMP);
+  var pin = p.pin != null && String(p.pin).trim() !== '' ? String(p.pin).trim() : emp.pin;
+  if (!/^\d{4}$/.test(pin)) throw new Error('PIN must be exactly 4 digits');
+  var clash = readEmployees_().find(function (x) { return x.pin === pin && x.name !== emp.name; });
+  if (clash) throw new Error('That PIN is taken — pick a different one');
+  sh.getRange(emp.row, 3).setValue(pin);
+  if (p.email != null) sh.getRange(emp.row, 4).setValue(String(p.email).trim());
+  if (p.phone != null) sh.getRange(emp.row, 5).setValue(String(p.phone).trim());
+}
+
 function saveFixup_(rowKey, override, note) {
   var sh = sheet_(TAB.FIX);
   var vals = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues() : [];
@@ -480,9 +494,15 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
 
   var groups = summaryGroups_(mine, priced.rates.labels);
   var sumRows = groups.map(function (g) {
-    return '<tr><td style="padding:5px 10px;border-bottom:1px solid #eef2f7;color:#0a1424">' + esc_(g.label) +
-      '</td><td style="padding:5px 10px;border-bottom:1px solid #eef2f7;text-align:center;color:#334054">' + g.qty +
-      '</td><td style="padding:5px 10px;border-bottom:1px solid #eef2f7;text-align:right;font-weight:600;color:#0a1424">$' + g.amt.toFixed(2) + '</td></tr>';
+    var row = '<tr><td style="padding:7px 10px;border-bottom:1px solid #eef2f7;color:#0a1424;font-weight:700">' + esc_(g.label) +
+      '</td><td style="padding:7px 10px;border-bottom:1px solid #eef2f7;text-align:center;color:#334054;font-weight:700">' + g.qty +
+      '</td><td style="padding:7px 10px;border-bottom:1px solid #eef2f7;text-align:right;font-weight:700;color:#0a1424">$' + g.amt.toFixed(2) + '</td></tr>';
+    (g.children || []).forEach(function (c) {
+      row += '<tr><td style="padding:4px 10px 4px 26px;border-bottom:1px solid #f4f7fb;color:#6b7890;font-size:12px">· ' + esc_(c.label) +
+        '</td><td style="padding:4px 10px;border-bottom:1px solid #f4f7fb;text-align:center;color:#6b7890;font-size:12px">' + c.qty +
+        '</td><td style="padding:4px 10px;border-bottom:1px solid #f4f7fb;text-align:right;color:#6b7890;font-size:12px">$' + c.amt.toFixed(2) + '</td></tr>';
+    });
+    return row;
   }).join('');
   var rows = mine.map(function (i) {
     return '<tr><td style="padding:6px 10px;border-bottom:1px solid #eef2f7;color:#334054;white-space:nowrap">' + i.date +
@@ -500,12 +520,12 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
     '<td><div style="color:#6b7890;font-size:12px">PAID TO</div><div style="font-weight:700;color:#0a1424">' + esc_(name) + '</div></td>' +
     '<td style="text-align:right"><div style="color:#6b7890;font-size:12px">PERIOD</div><div style="font-weight:700;color:#0a1424">' + periodStart + ' → ' + periodEnd + '</div></td>' +
     '</tr></table>' +
-    '<div style="font-weight:800;color:#0a1424;font-size:13px;margin:4px 0 6px">WORK SUMMARY</div>' +
+    '<div style="background:#eef4fa;color:#053b5d;font-weight:800;font-size:11.5px;letter-spacing:.8px;padding:7px 12px;border-radius:8px;margin:4px 0 10px">WORK SUMMARY</div>' +
     '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">' +
     '<tr style="background:#f4f6fb"><th style="text-align:left;padding:7px 10px;color:#6b7890;font-size:11px">TYPE</th><th style="padding:7px 10px;color:#6b7890;font-size:11px">QTY</th><th style="text-align:right;padding:7px 10px;color:#6b7890;font-size:11px">AMOUNT</th></tr>' +
     sumRows +
     '</table>' +
-    '<div style="font-weight:800;color:#0a1424;font-size:13px;margin:4px 0 6px">DETAIL</div>' +
+    '<div style="background:#eef4fa;color:#053b5d;font-weight:800;font-size:11.5px;letter-spacing:.8px;padding:7px 12px;border-radius:8px;margin:20px 0 10px">DETAIL</div>' +
     '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
     '<tr style="background:#f4f6fb"><th style="text-align:left;padding:8px 10px;color:#6b7890;font-size:11px">DATE</th><th style="text-align:left;padding:8px 10px;color:#6b7890;font-size:11px">WORK</th><th style="text-align:right;padding:8px 10px;color:#6b7890;font-size:11px">AMOUNT</th></tr>' +
     rows +
@@ -521,22 +541,33 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
 }
 
 function summaryGroups_(items, labels) {
-  var g = {};
-  var add = function (key, label, order, qty, amt) {
-    if (!g[key]) g[key] = { label: label, order: order, qty: 0, amt: 0 };
-    g[key].qty += qty; g[key].amt += amt;
+  var P = {
+    clean: { label: 'Units Cleaned', order: 1, qty: 0, amt: 0, kids: {} },
+    roll: { label: 'Units Rolled', order: 2, qty: 0, amt: 0 },
+    delivery: { label: 'Delivery Setups/Takedowns', order: 3, qty: 0, amt: 0 },
+    pickup: { label: 'Customer Pickup/Returns', order: 4, qty: 0, amt: 0 },
+    misc: { label: 'Misc. Hours', order: 5, qty: 0, amt: 0 },
   };
   items.forEach(function (i) {
-    if (i.kind === 'clean') add('c:' + i.cat, 'Cleaned — ' + (labels[i.cat] || i.cat), 10, 1, i.amount);
-    else if (i.kind === 'roll') add('roll', 'Rolled', 20, 1, i.amount);
-    else if (i.kind === 'delivery') add('del', 'Delivery setup/takedowns', 30, i.qty, i.amount);
-    else if (i.kind === 'pickup') add('pu', 'Customer pickups/returns', 40, i.qty, i.amount);
-    else if (i.kind === 'hourly') add('hr', 'Hourly work', 50, i.qty, i.amount);
-    else add('flat', 'One-offs & adjustments', 60, 1, i.amount);
+    if (i.kind === 'clean') {
+      P.clean.qty += 1; P.clean.amt += i.amount;
+      var k = i.cat || '?';
+      var c = P.clean.kids[k] = P.clean.kids[k] || { label: (labels || {})[k] || k, qty: 0, amt: 0 };
+      c.qty += 1; c.amt += i.amount;
+    } else if (i.kind === 'roll') { P.roll.qty += 1; P.roll.amt += i.amount; }
+    else if (i.kind === 'delivery') { P.delivery.qty += i.qty; P.delivery.amt += i.amount; }
+    else if (i.kind === 'pickup') { P.pickup.qty += i.qty; P.pickup.amt += i.amount; }
+    else { P.misc.qty += i.qty; P.misc.amt += i.amount; }
   });
-  return Object.keys(g).map(function (k) { return g[k]; })
-    .sort(function (a, b) { return a.order - b.order || (a.label < b.label ? -1 : 1); })
-    .map(function (x) { return { label: x.label, qty: x.qty, amt: round2_(x.amt) }; });
+  return Object.keys(P).map(function (k) { return P[k]; })
+    .filter(function (g) { return g.qty > 0 || g.amt !== 0; })
+    .sort(function (a, b) { return a.order - b.order; })
+    .map(function (g) {
+      var kids = g.kids ? Object.keys(g.kids).map(function (k) { return g.kids[k]; })
+        .sort(function (a, b) { return a.label < b.label ? -1 : 1; })
+        .map(function (c) { return { label: c.label, qty: c.qty, amt: round2_(c.amt) }; }) : [];
+      return { label: g.label, qty: g.qty, amt: round2_(g.amt), children: kids };
+    });
 }
 
 function esc_(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
