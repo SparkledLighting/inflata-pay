@@ -137,11 +137,14 @@ export default function App() {
     const tm = (e) => {
       if (!active || startY == null) return
       const dy = e.touches[0].clientY - startY
-      const v = dy > 0 && window.scrollY <= 0 ? Math.min(dy, 110) : 0
+      if (dy < -8 || window.scrollY > 0) { // they're scrolling, not pulling — stand down
+        active = false; startY = null; pullRef.current = 0; setPull(0); return
+      }
+      const v = dy > 0 ? Math.min(dy, 140) : 0
       pullRef.current = v; setPull(v)
     }
     const te = () => {
-      const fire = pullRef.current >= 70
+      const fire = pullRef.current >= 100
       pullRef.current = 0; setPull(0); startY = null; active = false
       if (fire) load(pin, user, server, { toast: true })
     }
@@ -192,7 +195,7 @@ export default function App() {
 
       </div>
       {pull > 8 && (
-        <div style={{ position: 'fixed', top: 'calc(env(safe-area-inset-top) + 62px)', left: '50%', transform: `translateX(-50%) rotate(${pull * 2.6}deg)`, opacity: Math.min(1, pull / 70), zIndex: 45, background: '#fff', borderRadius: '50%', padding: 8, boxShadow: 'var(--shadow-md)', color: pull >= 70 ? 'var(--blue)' : 'var(--faint)' }}>
+        <div style={{ position: 'fixed', top: 'calc(env(safe-area-inset-top) + 62px)', left: '50%', transform: `translateX(-50%) rotate(${pull * 2.6}deg)`, opacity: Math.min(1, pull / 100), zIndex: 45, background: '#fff', borderRadius: '50%', padding: 8, boxShadow: 'var(--shadow-md)', color: pull >= 100 ? 'var(--blue)' : 'var(--faint)' }}>
           <RefreshCw size={20} />
         </div>
       )}
