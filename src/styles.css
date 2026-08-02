@@ -166,3 +166,7 @@ input, select, textarea { font-family: inherit; font-size: 16px; }
 .stub-sec { background: #eef4fa; color: var(--blue-ink); font-weight: 800; font-size: 11.5px; letter-spacing: .8px; padding: 7px 12px; border-radius: 8px; margin: 16px 0 10px; }
 .stub-sec:first-child { margin-top: 2px; }
 .stub .subrow td { color: var(--muted); font-size: 12.5px; border-bottom: 1px solid #f2f5fa; }
+
+.avatar { border-radius: 50%; object-fit: cover; background: #e3f1f8; color: var(--blue-ink); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; flex: 0 0 auto; }
+.brand { flex-direction: column; align-items: flex-start; gap: 0; }
+.brand .sub { margin-left: 3px; font-size: 9.5px; letter-spacing: .8px; }

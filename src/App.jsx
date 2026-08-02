@@ -34,6 +34,22 @@ const clientSum = (data, name) => {
   return { earned: r2(earned), paid: r2(paid), owed: r2(earned - paid) }
 }
 
+async function fileToDataUrl(file, size = 256) {
+  const bmp = await createImageBitmap(file)
+  const sq = Math.min(bmp.width, bmp.height)
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  c.getContext('2d').drawImage(bmp, (bmp.width - sq) / 2, (bmp.height - sq) / 2, sq, sq, 0, 0, size, size)
+  return c.toDataURL('image/jpeg', 0.82)
+}
+
+function Avatar({ name, photo, size = 34 }) {
+  const initials = String(name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()
+  return photo
+    ? <img className="avatar" src={photo} alt={name} style={{ width: size, height: size }} />
+    : <div className="avatar" style={{ width: size, height: size, fontSize: size * 0.38 }}>{initials}</div>
+}
+
 async function apiGet(server, user, pin) {
   const res = await fetch(`${server}?user=${encodeURIComponent(user)}&pin=${encodeURIComponent(pin)}`, { redirect: 'follow' })
   const j = await res.json()
@@ -57,6 +73,7 @@ export default function App() {
   const [user, setUser] = useState(() => localStorage.getItem(LS_USER) || '')
   const [pin, setPin] = useState(() => localStorage.getItem(LS_PIN) || '')
   const [data, setData] = useState(null)
+  const [booting, setBooting] = useState(() => !!(localStorage.getItem(LS_PIN) && localStorage.getItem(LS_USER)))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
@@ -75,9 +92,13 @@ export default function App() {
     } catch (e) {
       if (/No match|Email\/phone/i.test(e.message)) { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
       setError(e.message)
-    } finally { setLoading(false) }
+    } finally { setLoading(false); setBooting(false) }
   }
-  useEffect(() => { if (server && pin && user && !data) load() }, []) // eslint-disable-line
+  useEffect(() => {
+    history.replaceState({ base: true, tab: 'home' }, '')
+    if (server && pin && user && !data) load()
+    else setBooting(false)
+  }, []) // eslint-disable-line
 
   const lastActionRef = useRef(0)
   const mutate = async (body) => {
@@ -118,6 +139,7 @@ export default function App() {
 
   let body
   if (!server) body = <Connect onSave={(u) => { localStorage.setItem(LS_SERVER, u); setServer(u) }} />
+  else if (!data && booting) body = <Splash />
   else if (!data) body = <Login loading={loading} error={error} savedUser={user} onSwitchUser={switchUser}
     onSubmit={(u, p) => { setUser(u); setPin(p); load(p, u) }} />
   else if (data.role === 'owner') body = <OwnerApp data={data} mutate={mutate} reload={() => load()} say={say} openStub={setStub} />
@@ -126,7 +148,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="topbar no-print">
-        <div className="brand"><span className="logo">InflataPay</span><span className="sub">InflataPalooza</span></div>
+        <div className="brand"><span className="logo">InflataPay</span><span className="sub">by INFLATAPALOOZA</span></div>
         {data && (
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => load()} aria-label="Refresh"><RefreshCw size={16} /></button>
@@ -145,6 +167,15 @@ export default function App() {
           }} />
       )}
       {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}
+
+function Splash() {
+  return (
+    <div className="center" style={{ paddingTop: '18dvh' }}>
+      <img src={logo} alt="InflataPalooza" style={{ width: 220, maxWidth: '72%' }} />
+      <div className="spin" />
     </div>
   )
 }
@@ -297,6 +328,12 @@ function WorkSummary({ items, labels, title }) {
 /* ------------------------------ owner ------------------------------ */
 function OwnerApp({ data, mutate, say, openStub }) {
   const [tab, setTab] = useState('home')
+  const nav = (t) => { if (t !== tab) { history.pushState({ tab: t }, ''); setTab(t) } }
+  useEffect(() => {
+    const h = (e) => { const st = e.state || {}; if (st.tab) setTab(st.tab); else if (st.base) setTab('home') }
+    window.addEventListener('popstate', h)
+    return () => window.removeEventListener('popstate', h)
+  }, [])
   const [payFor, setPayFor] = useState(null)
   const [fixKey, setFixKey] = useState(null)
   const [editEmp, setEditEmp] = useState(null)
@@ -321,7 +358,7 @@ function OwnerApp({ data, mutate, say, openStub }) {
     <>
       {tab === 'home' && (
         <OwnerHome data={data} payroll={payroll} onPay={setPayFor} suggestPeriod={suggestPeriod} openStub={openStub}
-          issuesCount={issues.length} goIssues={() => setTab('entries')} />
+          issuesCount={issues.length} goIssues={() => nav('entries')} />
       )}
       {tab === 'entries' && (
         <Entries data={data} issues={issues} onFix={setFixKey} />
@@ -330,16 +367,16 @@ function OwnerApp({ data, mutate, say, openStub }) {
       {tab === 'team' && <Team data={data} onEdit={setEditEmp} />}
 
       <div className="tabbar no-print">
-        <TabBtn icon={<Home size={20} />} label="Home" on={tab === 'home'} onClick={() => setTab('home')} />
-        <TabBtn icon={<ListChecks size={20} />} label="Entries" on={tab === 'entries'} onClick={() => setTab('entries')} badge={issues.length} />
-        <TabBtn icon={<SlidersHorizontal size={20} />} label="Rates" on={tab === 'rates'} onClick={() => setTab('rates')} />
-        <TabBtn icon={<Users size={20} />} label="Team" on={tab === 'team'} onClick={() => setTab('team')} />
+        <TabBtn icon={<Home size={20} />} label="Home" on={tab === 'home'} onClick={() => nav('home')} />
+        <TabBtn icon={<ListChecks size={20} />} label="Entries" on={tab === 'entries'} onClick={() => nav('entries')} badge={issues.length} />
+        <TabBtn icon={<SlidersHorizontal size={20} />} label="Rates" on={tab === 'rates'} onClick={() => nav('rates')} />
+        <TabBtn icon={<Users size={20} />} label="Team" on={tab === 'team'} onClick={() => nav('team')} />
       </div>
 
       {payFor && (
         <PayModal name={payFor} data={data} suggest={suggestPeriod(payFor)}
           onClose={() => setPayFor(null)}
-          onSaved={(stubReq) => { setPayFor(null); say('Payment recorded'); if (stubReq) openStub(stubReq) }}
+          onSaved={(stubReq) => { say('Payment recorded'); if (stubReq) openStub(stubReq) }}
           mutate={mutate} />
       )}
       {fixKey && (
@@ -442,7 +479,7 @@ function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount,
       )}
 
       <div className="section-title">Leaderboard · season</div>
-      <div className="card"><Leaderboard rows={(data.leaderboard || {}).season || []} /></div>
+      <div className="card"><Leaderboard rows={(data.leaderboard || {}).season || []} photos={data.photos} /></div>
     </>
   )
 }
@@ -545,12 +582,12 @@ function FixupModal({ rowKey, data, mutate, say, onClose }) {
     if (exclude) override.exclude = true
     if (flatOn && flat.person && flat.amount !== '') override.flat = { person: flat.person, amount: Number(flat.amount), label: flat.label || 'Adjustment' }
     if (puOn && pu.person) override.pickupCredit = { person: pu.person, count: Number(pu.count) || 1 }
-    try { await mutate({ action: 'saveFixup', rowKey, override, note }); say('Saved'); onClose() }
+    try { await mutate({ action: 'saveFixup', rowKey, override, note }); say('Saved'); history.back() }
     catch (e) { say(e.message) } finally { setBusy(false) }
   }
   const remove = async () => {
     setBusy(true)
-    try { await mutate({ action: 'deleteFixup', rowKey }); say('Overrides removed'); onClose() }
+    try { await mutate({ action: 'deleteFixup', rowKey }); say('Overrides removed'); history.back() }
     catch (e) { say(e.message) } finally { setBusy(false) }
   }
 
@@ -622,7 +659,8 @@ function PayModal({ name, data, suggest, onClose, onSaved, mutate }) {
       const fresh = await mutate({ action: 'addPayment', payment: { employee: name, amount: Number(amount), periodStart: start, periodEnd: end, method, note } })
       const mine = fresh.payments.filter((p) => p.employee === name)
       const newest = mine[mine.length - 1]
-      onSaved(thenStub ? { employee: name, periodStart: start, periodEnd: end, paymentId: newest && newest.id } : null)
+      history.back()
+      setTimeout(() => onSaved(thenStub ? { employee: name, periodStart: start, periodEnd: end, paymentId: newest && newest.id } : null), 80)
     } catch (e) { alert(e.message); setBusy(false) }
   }
 
@@ -655,6 +693,15 @@ function PayModal({ name, data, suggest, onClose, onSaved, mutate }) {
 }
 
 function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
+  const pushed = useRef(false)
+  useEffect(() => {
+    history.pushState({ layer: 'stub' }, '')
+    pushed.current = true
+    const h = () => { pushed.current = false; onClose() }
+    window.addEventListener('popstate', h)
+    return () => { window.removeEventListener('popstate', h); if (pushed.current) { pushed.current = false; history.back() } }
+  }, []) // eslint-disable-line
+  const close = () => history.back()
   const { employee, periodStart, periodEnd, paymentId } = stub
   const items = data.items
     .filter((i) => i.person === employee && i.date >= periodStart && i.date <= periodEnd)
@@ -675,7 +722,7 @@ function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
       <div className="modal" style={{ borderRadius: 0, maxHeight: '100dvh', paddingTop: 'calc(env(safe-area-inset-top) + 16px)' }}>
         <div className="row no-print" style={{ marginBottom: 12 }}>
           <h3 style={{ margin: 0 }}>Earnings Statement</h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}><X size={17} /></button>
+          <button className="btn btn-ghost btn-sm" onClick={close}><X size={17} /></button>
         </div>
         <div className="stub">
           <div className="stub-head">
@@ -702,19 +749,32 @@ function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
                 <tr><td style={{ fontWeight: 800, borderBottom: 'none', paddingTop: 10 }}>Total</td><td style={{ borderBottom: 'none' }} /><td className="tr" style={{ fontWeight: 800, color: 'var(--blue)', borderBottom: 'none', paddingTop: 10 }}>{$(total)}</td></tr>
               </tbody>
             </table>
-            <div className="stub-sec">DETAIL</div>
-            <table>
-              <thead><tr><th>DATE</th><th>WORK</th><th className="tr">AMT</th></tr></thead>
-              <tbody>
-                {items.map((i, n) => (
-                  <tr key={n}><td style={{ whiteSpace: 'nowrap' }}>{fdate(i.date)}</td><td>{i.label}</td><td className="tr" style={{ fontWeight: 600 }}>{$(i.amount)}</td></tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr><td /><td className="tr">Period total</td><td className="tr" style={{ color: 'var(--blue)' }}>{$(total)}</td></tr>
-                {payment && <tr><td /><td className="tr" style={{ fontWeight: 600, color: 'var(--ink-soft)' }}>Payment · {payment.method} · {fdate(payment.recorded)}</td><td className="tr" style={{ color: 'var(--green)' }}>−{$(payment.amount)}</td></tr>}
-              </tfoot>
-            </table>
+            <div className="stub-sec">ENTRIES</div>
+            {items.map((i, n) => (
+              <div key={n} className="list-item">
+                <div className="li-main">
+                  <div className="li-title" style={{ fontSize: 14 }}>{i.label}</div>
+                  <div className="li-sub">
+                    {fdate(i.date)}
+                    {i.flags.includes('double') && <> · <span className="tag tag-teal">2× pay</span></>}
+                    {i.flags.includes('nopay') && <> · <span className="tag tag-blue">personal use</span></>}
+                    {i.flags.includes('override') && <> · <span className="tag tag-gold">adjusted</span></>}
+                    {i.notes && <> · {i.notes.slice(0, 60)}</>}
+                  </div>
+                </div>
+                <div className={'li-amt' + (i.amount === 0 ? ' zero' : '')}>{$(i.amount)}</div>
+              </div>
+            ))}
+            <div className="row" style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 800 }}>Period total</div>
+              <div style={{ fontWeight: 800, color: 'var(--blue)' }}>{$(total)}</div>
+            </div>
+            {payment && (
+              <div className="row" style={{ marginTop: 4 }}>
+                <div className="li-sub">Payment · {payment.method} · {fdate(payment.recorded)}</div>
+                <div style={{ fontWeight: 700, color: 'var(--green)' }}>−{$(payment.amount)}</div>
+              </div>
+            )}
             <div className="mt14" style={{ background: 'var(--bg)', borderRadius: 10, padding: '10px 12px', fontSize: 13 }}>
               Season to date — Earned <b>{$(sum.earned)}</b> · Paid <b>{$(sum.paid)}</b> · Balance <b style={{ color: 'var(--blue)' }}>{$(sum.owed)}</b>
             </div>
@@ -779,9 +839,12 @@ function Team({ data, onEdit }) {
       {data.employees.map((e) => (
         <button key={e.name} className="card tap btn-block" style={{ textAlign: 'left' }} onClick={() => onEdit(e)}>
           <div className="row">
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>{e.name} {e.role === 'owner' && <span className="tag tag-blue">owner</span>} {!e.inPayroll && e.role !== 'owner' && <span className="tag tag-gold">no payroll</span>} {!e.active && <span className="tag tag-red">inactive</span>}</div>
-              <div className="muted" style={{ fontSize: 12.5 }}>{e.email || 'no email'} · {e.phone || 'no phone'}</div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <Avatar name={e.name} photo={e.photo} size={40} />
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 16 }}>{e.name} {e.role === 'owner' && <span className="tag tag-blue">owner</span>} {!e.inPayroll && e.role !== 'owner' && <span className="tag tag-gold">no payroll</span>} {!e.active && <span className="tag tag-red">inactive</span>}</div>
+                <div className="muted" style={{ fontSize: 12.5 }}>{e.email || 'no email'} · {e.phone || 'no phone'}</div>
+              </div>
             </div>
             <div style={{ textAlign: 'right' }}>
               <div className="li-sub">PIN</div>
@@ -803,11 +866,21 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
   const save = async () => {
     if (!f.name.trim() || !/^\d{4}$/.test(String(f.pin))) { say('Need a name and a 4-digit PIN'); return }
     setBusy(true)
-    try { await mutate({ action: 'saveEmployee', employee: f }); say('Saved'); onClose() }
+    try { await mutate({ action: 'saveEmployee', employee: f }); say('Saved'); history.back() }
     catch (e) { say(e.message) } finally { setBusy(false) }
   }
   return (
     <Modal onClose={onClose} title={isNew ? 'Add team member' : 'Edit ' + first(emp.name)}>
+      <div className="center" style={{ marginBottom: 10 }}>
+        <Avatar name={f.name || '?'} photo={f.photo} size={72} />
+        <div>
+          <label className="btn btn-ghost btn-sm" style={{ marginTop: 8, display: 'inline-flex' }}>
+            Change photo
+            <input type="file" accept="image/*" style={{ display: 'none' }}
+              onChange={async (e) => { const file = e.target.files[0]; if (file) setF({ ...f, photo: await fileToDataUrl(file) }) }} />
+          </label>
+        </div>
+      </div>
       <div className="field"><label>Full name (exactly as in the Form)</label><input value={f.name} disabled={!isNew} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
       <div className="grid2">
         <div className="field"><label>PIN (4 digits)</label><input inputMode="numeric" maxLength={4} value={f.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} /></div>
@@ -826,10 +899,18 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
 /* ------------------------------ employee portal ------------------------------ */
 function EmployeeApp({ data, say, openStub, saveSelf }) {
   const [tab, setTab] = useState('home')
+  const nav = (t) => { if (t !== tab) { history.pushState({ tab: t }, ''); setTab(t) } }
+  useEffect(() => {
+    const h = (e) => { const st = e.state || {}; if (st.tab) setTab(st.tab); else if (st.base) setTab('home') }
+    window.addEventListener('popstate', h)
+    return () => window.removeEventListener('popstate', h)
+  }, [])
   const s = data.summary
   const t = todayISO()
   const [win, setWin] = useState('season')
-  const from = win === '7d' ? addDays(t, -7) : win === '30d' ? addDays(t, -30) : '0000'
+  const paidEnds = data.payments.map((p) => p.periodEnd).sort()
+  const owedFrom = paidEnds.length ? addDays(paidEnds[paidEnds.length - 1], 1) : '0000'
+  const from = win === '7d' ? addDays(t, -7) : win === '30d' ? addDays(t, -30) : win === 'owed' ? owedFrom : '0000'
   const items = data.items.filter((i) => i.date >= from).sort((a, b) => b.tsMs - a.tsMs)
 
   return (
@@ -841,29 +922,17 @@ function EmployeeApp({ data, say, openStub, saveSelf }) {
             <div className="big">{$(s.owed)}</div>
             <div className="small">Season so far: earned {$(s.earned)} · paid {$(s.paid)}</div>
           </div>
-          <div className="section-title">Payments to you</div>
-          <div className="card">
-            {data.payments.length === 0 && <div className="muted center" style={{ padding: 14 }}>No payments recorded yet.</div>}
-            {data.payments.map((p) => (
-              <button key={p.id} className="list-item btn-block" style={{ textAlign: 'left' }}
-                onClick={() => openStub({ employee: data.me.name, periodStart: p.periodStart, periodEnd: p.periodEnd, paymentId: p.id })}>
-                <div className="li-main">
-                  <div className="li-title">{$(p.amount)} · {p.method}</div>
-                  <div className="li-sub">{fdate(p.periodStart)} – {fdate(p.periodEnd)} · tap for statement</div>
-                </div>
-                <ChevronRight size={17} color="var(--faint)" />
-              </button>
-            ))}
-          </div>
+          <div className="section-title">Leaderboard</div>
+          <BoardTab data={data} />
         </>
       )}
       {tab === 'work' && (
         <>
           <div className="chiprow">
-            {[['season', 'Season'], ['30d', '30 days'], ['7d', '7 days']].map(([k, l]) =>
+            {[['owed', 'Owed'], ['season', 'Season'], ['30d', '30 days'], ['7d', '7 days']].map(([k, l]) =>
               <button key={k} className={'chip' + (win === k ? ' on' : '')} onClick={() => setWin(k)}>{l}</button>)}
           </div>
-          <WorkSummary items={items} labels={data.labels} title="Work summary" />
+          <WorkSummary items={items} labels={data.labels} title={win === 'owed' ? 'Owed — work summary' : 'Work summary'} />
           <div className="card">
             <div className="row" style={{ marginBottom: 6 }}>
               <div className="muted">{items.length} entries</div>
@@ -881,13 +950,30 @@ function EmployeeApp({ data, say, openStub, saveSelf }) {
           </div>
         </>
       )}
-      {tab === 'board' && <BoardTab data={data} />}
+      {tab === 'paystubs' && (
+        <>
+          <div className="section-title">Paystubs</div>
+          <div className="card">
+            {data.payments.length === 0 && <div className="muted center" style={{ padding: 14 }}>No payments recorded yet.</div>}
+            {data.payments.map((p) => (
+              <button key={p.id} className="list-item btn-block" style={{ textAlign: 'left' }}
+                onClick={() => openStub({ employee: data.me.name, periodStart: p.periodStart, periodEnd: p.periodEnd, paymentId: p.id })}>
+                <div className="li-main">
+                  <div className="li-title">{$(p.amount)} · {p.method}</div>
+                  <div className="li-sub">{fdate(p.periodStart)} – {fdate(p.periodEnd)} · tap for statement</div>
+                </div>
+                <ChevronRight size={17} color="var(--faint)" />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {tab === 'profile' && <ProfileTab data={data} saveSelf={saveSelf} say={say} />}
       <div className="tabbar no-print">
-        <TabBtn icon={<Home size={20} />} label="Home" on={tab === 'home'} onClick={() => setTab('home')} />
-        <TabBtn icon={<ListChecks size={20} />} label="My work" on={tab === 'work'} onClick={() => setTab('work')} />
-        <TabBtn icon={<Trophy size={20} />} label="Board" on={tab === 'board'} onClick={() => setTab('board')} />
-        <TabBtn icon={<User size={20} />} label="Profile" on={tab === 'profile'} onClick={() => setTab('profile')} />
+        <TabBtn icon={<Home size={20} />} label="Home" on={tab === 'home'} onClick={() => nav('home')} />
+        <TabBtn icon={<ListChecks size={20} />} label="My work" on={tab === 'work'} onClick={() => nav('work')} />
+        <TabBtn icon={<FileText size={20} />} label="Paystubs" on={tab === 'paystubs'} onClick={() => nav('paystubs')} />
+        <TabBtn icon={<User size={20} />} label="Profile" on={tab === 'profile'} onClick={() => nav('profile')} />
       </div>
     </>
   )
@@ -900,7 +986,7 @@ function ProfileTab({ data, saveSelf, say }) {
     if (f.pin && !/^\d{4}$/.test(f.pin)) { say('PIN must be 4 digits'); return }
     setBusy(true)
     try {
-      await saveSelf({ email: f.email, phone: f.phone, ...(f.pin ? { pin: f.pin } : {}) })
+      await saveSelf({ email: f.email, phone: f.phone, ...(f.pin ? { pin: f.pin } : {}), ...(f.photo != null ? { photo: f.photo } : {}) })
       say('Profile saved'); setF({ ...f, pin: '' })
     } catch (e) { say(e.message) } finally { setBusy(false) }
   }
@@ -908,6 +994,16 @@ function ProfileTab({ data, saveSelf, say }) {
     <>
       <div className="section-title">Your profile</div>
       <div className="card">
+        <div className="center" style={{ marginBottom: 14 }}>
+          <Avatar name={data.me.name} photo={f.photo != null ? f.photo : data.me.photo} size={84} />
+          <div>
+            <label className="btn btn-ghost btn-sm" style={{ marginTop: 10, display: 'inline-flex' }}>
+              Change photo
+              <input type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={async (e) => { const file = e.target.files[0]; if (file) setF({ ...f, photo: await fileToDataUrl(file) }) }} />
+            </label>
+          </div>
+        </div>
         <div className="field"><label>Name</label><input value={data.me.name} disabled /></div>
         <div className="field"><label>Email (paystubs go here)</label>
           <input type="email" autoCapitalize="none" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
@@ -930,18 +1026,18 @@ function BoardTab({ data }) {
         {[['7d', 'This week'], ['30d', 'This month'], ['season', 'Season']].map(([k, l]) =>
           <button key={k} className={'chip' + (w === k ? ' on' : '')} onClick={() => setW(k)}>{l}</button>)}
       </div>
-      <div className="card"><Leaderboard rows={(data.leaderboard || {})[w] || []} /></div>
-      <div className="muted center">Counts only — everyone's pay stays private. 💪</div>
+      <div className="card"><Leaderboard rows={(data.leaderboard || {})[w] || []} photos={data.photos} /></div>
     </>
   )
 }
 
-function Leaderboard({ rows }) {
+function Leaderboard({ rows, photos }) {
   const medals = ['🥇', '🥈', '🥉']
   if (!rows.length) return <div className="muted center" style={{ padding: 14 }}>No work logged in this window yet.</div>
   return rows.map((r, i) => (
     <div className="lb-row" key={r.name}>
       <div className="medal">{medals[i] || '·'}</div>
+      <Avatar name={r.name} photo={(photos || {})[r.name]} size={36} />
       <div>
         <div className="lb-name">{first(r.name)}</div>
         <div className="lb-sub">{r.rolls} rolls · {r.deliveries} deliveries · {r.pickups} pickups</div>
@@ -953,12 +1049,21 @@ function Leaderboard({ rows }) {
 
 /* ------------------------------ modal shell ------------------------------ */
 function Modal({ title, children, onClose }) {
+  const pushed = useRef(false)
+  useEffect(() => {
+    history.pushState({ layer: 'modal' }, '')
+    pushed.current = true
+    const h = () => { pushed.current = false; onClose() }
+    window.addEventListener('popstate', h)
+    return () => { window.removeEventListener('popstate', h); if (pushed.current) { pushed.current = false; history.back() } }
+  }, []) // eslint-disable-line
+  const close = () => history.back()
   return (
-    <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) close() }}>
       <div className="modal">
         <div className="row" style={{ marginBottom: 4 }}>
           <h3 style={{ marginBottom: 0 }}>{title}</h3>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}><X size={17} /></button>
+          <button className="btn btn-ghost btn-sm" onClick={close}><X size={17} /></button>
         </div>
         <div className="mt8">{children}</div>
       </div>

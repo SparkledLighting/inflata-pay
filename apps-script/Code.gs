@@ -123,7 +123,9 @@ function requireOwner_(ok) { if (!ok) throw new Error('Owner only'); }
 function ensureSetup_() {
   var ss = SpreadsheetApp.getActive();
   ensureTab_(ss, TAB.RATES, ['Category', 'Label', 'CleanRate', 'RollRate']);
-  ensureTab_(ss, TAB.EMP, ['Name', 'Role', 'PIN', 'Email', 'Phone', 'Active', 'InPayroll']);
+  ensureTab_(ss, TAB.EMP, ['Name', 'Role', 'PIN', 'Email', 'Phone', 'Active', 'InPayroll', 'Photo']);
+  var empSh = ss.getSheetByName(TAB.EMP);
+  if (String(empSh.getRange(1, 8).getValue()) !== 'Photo') empSh.getRange(1, 8).setValue('Photo');
   ensureTab_(ss, TAB.PAY, ['ID', 'DateRecorded', 'Employee', 'Amount', 'PeriodStart', 'PeriodEnd', 'Method', 'Note']);
   ensureTab_(ss, TAB.FIX, ['RowKey', 'OverrideJSON', 'Note', 'TimestampMs']);
 
@@ -220,8 +222,8 @@ function readResponses_() {
 function readEmployees_() {
   var sh = sheet_(TAB.EMP);
   if (sh.getLastRow() < 2) return [];
-  return sh.getRange(2, 1, sh.getLastRow() - 1, 7).getValues().map(function (r, i) {
-    return { row: i + 2, name: String(r[0]).trim(), role: String(r[1]).trim() || 'employee', pin: String(r[2]).trim(), email: String(r[3]).trim(), phone: String(r[4]).trim(), active: r[5] === true || String(r[5]).toUpperCase() === 'TRUE', inPayroll: r[6] === true || String(r[6]).toUpperCase() === 'TRUE' };
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues().map(function (r, i) {
+    return { row: i + 2, name: String(r[0]).trim(), role: String(r[1]).trim() || 'employee', pin: String(r[2]).trim(), email: String(r[3]).trim(), phone: String(r[4]).trim(), active: r[5] === true || String(r[5]).toUpperCase() === 'TRUE', inPayroll: r[6] === true || String(r[6]).toUpperCase() === 'TRUE', photo: String(r[7] || '') };
   }).filter(function (e) { return e.name; });
 }
 
@@ -380,10 +382,13 @@ function buildPayload_(emp) {
   var priced = priceAll_();
   var payments = readPayments_();
   var lb = leaderboard_(priced.items);
+  var photos = {};
+  priced.employees.forEach(function (e) { photos[e.name] = e.photo || ''; });
   var base = {
     role: emp.role,
     labels: priced.rates.labels,
-    me: { name: emp.name, email: emp.email, phone: emp.phone },
+    photos: photos,
+    me: { name: emp.name, email: emp.email, phone: emp.phone, photo: emp.photo || '' },
     leaderboard: lb,
     serverTime: fmtDate_(new Date()),
   };
@@ -442,8 +447,9 @@ function saveEmployee_(e) {
   var pinClash = emps.find(function (x) { return x.pin === String(e.pin) && x.name !== e.name; });
   if (e.pin && pinClash) throw new Error('That PIN is already used by ' + pinClash.name);
   var hit = emps.find(function (x) { return x.name === e.name; });
-  var row = [e.name, e.role || 'employee', String(e.pin || ''), e.email || '', e.phone || '', e.active !== false, e.inPayroll !== false];
-  if (hit) sh.getRange(hit.row, 1, 1, 7).setValues([row]);
+  var photo = e.photo != null ? String(e.photo) : (hit ? hit.photo : '');
+  var row = [e.name, e.role || 'employee', String(e.pin || ''), e.email || '', e.phone || '', e.active !== false, e.inPayroll !== false, photo];
+  if (hit) sh.getRange(hit.row, 1, 1, 8).setValues([row]);
   else sh.appendRow(row);
 }
 
@@ -456,6 +462,7 @@ function saveSelf_(emp, p) {
   sh.getRange(emp.row, 3).setValue(pin);
   if (p.email != null) sh.getRange(emp.row, 4).setValue(String(p.email).trim());
   if (p.phone != null) sh.getRange(emp.row, 5).setValue(String(p.phone).trim());
+  if (p.photo != null) sh.getRange(emp.row, 8).setValue(String(p.photo));
 }
 
 function saveFixup_(rowKey, override, note) {
