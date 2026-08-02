@@ -504,6 +504,7 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
     });
     return row;
   }).join('');
+  sumRows += '<tr><td style="padding:9px 10px;font-weight:800;color:#0a1424">Total</td><td></td><td style="padding:9px 10px;text-align:right;font-weight:800;color:#0b7db3">$' + periodTotal.toFixed(2) + '</td></tr>';
   var rows = mine.map(function (i) {
     return '<tr><td style="padding:6px 10px;border-bottom:1px solid #eef2f7;color:#334054;white-space:nowrap">' + i.date +
       '</td><td style="padding:6px 10px;border-bottom:1px solid #eef2f7;color:#0a1424">' + esc_(i.label) +
@@ -543,7 +544,7 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
 function summaryGroups_(items, labels) {
   var P = {
     clean: { label: 'Units Cleaned', order: 1, qty: 0, amt: 0, kids: {} },
-    roll: { label: 'Units Rolled', order: 2, qty: 0, amt: 0 },
+    roll: { label: 'Units Rolled', order: 2, qty: 0, amt: 0, kids: {} },
     delivery: { label: 'Delivery Setups/Takedowns', order: 3, qty: 0, amt: 0 },
     pickup: { label: 'Customer Pickup/Returns', order: 4, qty: 0, amt: 0 },
     misc: { label: 'Misc. Hours', order: 5, qty: 0, amt: 0 },
@@ -554,7 +555,12 @@ function summaryGroups_(items, labels) {
       var k = i.cat || '?';
       var c = P.clean.kids[k] = P.clean.kids[k] || { label: (labels || {})[k] || k, qty: 0, amt: 0 };
       c.qty += 1; c.amt += i.amount;
-    } else if (i.kind === 'roll') { P.roll.qty += 1; P.roll.amt += i.amount; }
+    } else if (i.kind === 'roll') {
+      P.roll.qty += 1; P.roll.amt += i.amount;
+      var rk = i.cat || '?';
+      var rc = P.roll.kids[rk] = P.roll.kids[rk] || { label: (labels || {})[rk] || rk, qty: 0, amt: 0 };
+      rc.qty += 1; rc.amt += i.amount;
+    }
     else if (i.kind === 'delivery') { P.delivery.qty += i.qty; P.delivery.amt += i.amount; }
     else if (i.kind === 'pickup') { P.pickup.qty += i.qty; P.pickup.amt += i.amount; }
     else { P.misc.qty += i.qty; P.misc.amt += i.amount; }

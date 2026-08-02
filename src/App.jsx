@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Home, ListChecks, SlidersHorizontal, Users, LogOut, AlertTriangle, Printer,
-  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, FileText, User
+  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User
 } from 'lucide-react'
+import logo from './assets/logo.png'
 
 /* ------------------------------ helpers ------------------------------ */
 const DEFAULT_SERVER = 'https://script.google.com/macros/s/AKfycbysEbLQPeC4JQPJV00QJfftF88hlooBay0VaHrU-bPYMzutHyIwxjRTb4n0K26MwquB/exec'
@@ -78,11 +79,31 @@ export default function App() {
   }
   useEffect(() => { if (server && pin && user && !data) load() }, []) // eslint-disable-line
 
+  const lastActionRef = useRef(0)
   const mutate = async (body) => {
+    lastActionRef.current = Date.now()
     const d = await apiPost(server, { user, pin, ...body })
     setData(d)
+    lastActionRef.current = Date.now()
     return d
   }
+
+  const silentLoad = async () => {
+    if (!server || !pin || !user || document.hidden) return
+    const t0 = Date.now()
+    try {
+      const d = await apiGet(server, user, pin)
+      if (lastActionRef.current < t0) setData(d)
+    } catch { /* quiet — next tick will retry */ }
+  }
+  useEffect(() => {
+    if (!data) return
+    const iv = setInterval(silentLoad, 30000)
+    const onWake = () => { if (!document.hidden) silentLoad() }
+    document.addEventListener('visibilitychange', onWake)
+    window.addEventListener('focus', onWake)
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onWake); window.removeEventListener('focus', onWake) }
+  }, [data ? 1 : 0, user, pin, server]) // eslint-disable-line
 
   const saveSelf = async (profile) => {
     const d = await mutate({ action: 'saveSelf', profile })
@@ -163,8 +184,8 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
 
   if (stage === 'who') return (
     <div className="mt20">
-      <div className="center"><div style={{ fontSize: 40 }}>🎪</div>
-        <h2 style={{ fontWeight: 800, marginTop: 6 }}>Welcome to InflataPay</h2>
+      <div className="center"><img src={logo} alt="InflataPalooza" style={{ width: 230, maxWidth: '78%' }} />
+        <h2 style={{ fontWeight: 800, marginTop: 10 }}>Welcome to InflataPay</h2>
         <div className="muted mt8">Sign in with the email or cell number on file</div>
       </div>
       <div className="card mt14">
@@ -179,8 +200,8 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
 
   return (
     <div className="center mt20">
-      <div style={{ fontSize: 40 }}>🎪</div>
-      <h2 style={{ fontWeight: 800, marginTop: 6 }}>Enter your PIN</h2>
+      <img src={logo} alt="InflataPalooza" style={{ width: 200, maxWidth: '72%' }} />
+      <h2 style={{ fontWeight: 800, marginTop: 10 }}>Enter your PIN</h2>
       <div className="muted mt8">
         {loading ? 'Checking…' : error ? <span className="err">{error}</span> : <>as <b>{who}</b> · <button style={{ color: 'var(--blue)', fontWeight: 700 }} onClick={() => { setStage('who'); setP(''); onSwitchUser && onSwitchUser() }}>switch</button></>}
       </div>
@@ -201,7 +222,7 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
 function summaryGroups(items, labels) {
   const P = {
     clean: { label: 'Units Cleaned', order: 1, qty: 0, amt: 0, kids: {} },
-    roll: { label: 'Units Rolled', order: 2, qty: 0, amt: 0 },
+    roll: { label: 'Units Rolled', order: 2, qty: 0, amt: 0, kids: {} },
     delivery: { label: 'Delivery Setups/Takedowns', order: 3, qty: 0, amt: 0 },
     pickup: { label: 'Customer Pickup/Returns', order: 4, qty: 0, amt: 0 },
     misc: { label: 'Misc. Hours', order: 5, qty: 0, amt: 0 },
@@ -212,7 +233,12 @@ function summaryGroups(items, labels) {
       const k = i.cat || '?'
       const c = P.clean.kids[k] = P.clean.kids[k] || { label: (labels || {})[k] || k, qty: 0, amt: 0 }
       c.qty += 1; c.amt += i.amount
-    } else if (i.kind === 'roll') { P.roll.qty += 1; P.roll.amt += i.amount }
+    } else if (i.kind === 'roll') {
+      P.roll.qty += 1; P.roll.amt += i.amount
+      const k = i.cat || '?'
+      const c = P.roll.kids[k] = P.roll.kids[k] || { label: (labels || {})[k] || k, qty: 0, amt: 0 }
+      c.qty += 1; c.amt += i.amount
+    }
     else if (i.kind === 'delivery') { P.delivery.qty += i.qty; P.delivery.amt += i.amount }
     else if (i.kind === 'pickup') { P.pickup.qty += i.qty; P.pickup.amt += i.amount }
     else { P.misc.qty += i.qty; P.misc.amt += i.amount }
@@ -227,30 +253,39 @@ function summaryGroups(items, labels) {
 function WorkSummary({ items, labels, title }) {
   const groups = summaryGroups(items, labels)
   const total = r2(items.reduce((s, i) => s + i.amount, 0))
+  const [open, setOpen] = useState({})
   if (!groups.length) return null
   return (
     <div className="card">
       {title && <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>{title}</div>}
-      {groups.map((gr) => (
-        <React.Fragment key={gr.label}>
-          <div className="list-item" style={{ padding: '8px 2px' }}>
-            <div className="li-main"><div className="li-title" style={{ fontSize: 14.5 }}>{gr.label}</div></div>
-            <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
-              <span className="li-sub" style={{ minWidth: 28, textAlign: 'right', fontWeight: 700 }}>×{gr.qty}</span>
-              <span className="li-amt" style={{ minWidth: 70, textAlign: 'right' }}>{$(gr.amt)}</span>
-            </div>
-          </div>
-          {(gr.children || []).map((c) => (
-            <div className="list-item" key={c.label} style={{ padding: '3px 2px 3px 16px', borderBottom: 'none' }}>
-              <div className="li-sub">· {c.label}</div>
-              <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
-                <span className="li-sub" style={{ minWidth: 28, textAlign: 'right' }}>×{c.qty}</span>
-                <span className="li-sub" style={{ minWidth: 70, textAlign: 'right' }}>{$(c.amt)}</span>
+      {groups.map((gr) => {
+        const expandable = (gr.children || []).length > 0
+        const isOpen = !!open[gr.label]
+        return (
+          <React.Fragment key={gr.label}>
+            <button className="list-item btn-block" style={{ padding: '8px 2px', textAlign: 'left', cursor: expandable ? 'pointer' : 'default' }}
+              onClick={() => expandable && setOpen({ ...open, [gr.label]: !isOpen })}>
+              <div className="li-main" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                {expandable ? (isOpen ? <ChevronDown size={15} color="var(--faint)" /> : <ChevronRight size={15} color="var(--faint)" />) : <span style={{ width: 15 }} />}
+                <div className="li-title" style={{ fontSize: 14.5 }}>{gr.label}</div>
               </div>
-            </div>
-          ))}
-        </React.Fragment>
-      ))}
+              <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
+                <span className="li-sub" style={{ minWidth: 28, textAlign: 'right', fontWeight: 700 }}>×{gr.qty}</span>
+                <span className="li-amt" style={{ minWidth: 70, textAlign: 'right' }}>{$(gr.amt)}</span>
+              </div>
+            </button>
+            {isOpen && (gr.children || []).map((c) => (
+              <div className="list-item" key={c.label} style={{ padding: '3px 2px 3px 36px', borderBottom: 'none' }}>
+                <div className="li-sub">· {c.label}</div>
+                <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
+                  <span className="li-sub" style={{ minWidth: 28, textAlign: 'right' }}>×{c.qty}</span>
+                  <span className="li-sub" style={{ minWidth: 70, textAlign: 'right' }}>{$(c.amt)}</span>
+                </div>
+              </div>
+            ))}
+          </React.Fragment>
+        )
+      })}
       <div className="list-item" style={{ padding: '9px 2px', borderTop: '1.5px solid var(--hairline)' }}>
         <div className="li-title">Total</div>
         <div className="li-amt" style={{ color: 'var(--blue)', fontSize: 16 }}>{$(total)}</div>
@@ -664,6 +699,7 @@ function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
                     ))}
                   </React.Fragment>
                 ))}
+                <tr><td style={{ fontWeight: 800, borderBottom: 'none', paddingTop: 10 }}>Total</td><td style={{ borderBottom: 'none' }} /><td className="tr" style={{ fontWeight: 800, color: 'var(--blue)', borderBottom: 'none', paddingTop: 10 }}>{$(total)}</td></tr>
               </tbody>
             </table>
             <div className="stub-sec">DETAIL</div>
