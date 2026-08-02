@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Home, ListChecks, SlidersHorizontal, Users, LogOut, AlertTriangle, Printer,
-  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User, Camera
+  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User, Camera, Delete
 } from 'lucide-react'
 import logo from './assets/logo.png'
 
@@ -87,6 +87,8 @@ export default function App() {
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(''), 2400) }
   const lastActionRef = useRef(0)
+  const [pull, setPull] = useState(0)
+  const pullRef = useRef(0)
 
   const load = async (p = pin, u = user, s = server, opts = {}) => {
     if (!s || !p || !u) return
@@ -127,6 +129,28 @@ export default function App() {
       if (lastActionRef.current < t0 && localStorage.getItem(LS_PIN)) setData(d)
     } catch { /* quiet — next tick will retry */ }
   }
+  const standalone = typeof window !== 'undefined' && (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone)
+  useEffect(() => {
+    if (!data || !standalone) return
+    let startY = null, active = false
+    const ts = (e) => { if (window.scrollY <= 0) { startY = e.touches[0].clientY; active = true } else active = false }
+    const tm = (e) => {
+      if (!active || startY == null) return
+      const dy = e.touches[0].clientY - startY
+      const v = dy > 0 && window.scrollY <= 0 ? Math.min(dy, 110) : 0
+      pullRef.current = v; setPull(v)
+    }
+    const te = () => {
+      const fire = pullRef.current >= 70
+      pullRef.current = 0; setPull(0); startY = null; active = false
+      if (fire) load(pin, user, server, { toast: true })
+    }
+    window.addEventListener('touchstart', ts, { passive: true })
+    window.addEventListener('touchmove', tm, { passive: true })
+    window.addEventListener('touchend', te)
+    return () => { window.removeEventListener('touchstart', ts); window.removeEventListener('touchmove', tm); window.removeEventListener('touchend', te) }
+  }, [data ? 1 : 0, user, pin, server]) // eslint-disable-line
+
   useEffect(() => {
     if (!data) return
     const iv = setInterval(silentLoad, 30000)
@@ -167,7 +191,12 @@ export default function App() {
         )}
 
       </div>
-      <div className="main">{body}</div>
+      {pull > 8 && (
+        <div style={{ position: 'fixed', top: 'calc(env(safe-area-inset-top) + 62px)', left: '50%', transform: `translateX(-50%) rotate(${pull * 2.6}deg)`, opacity: Math.min(1, pull / 70), zIndex: 45, background: '#fff', borderRadius: '50%', padding: 8, boxShadow: 'var(--shadow-md)', color: pull >= 70 ? 'var(--blue)' : 'var(--faint)' }}>
+          <RefreshCw size={20} />
+        </div>
+      )}
+      <div className="main" style={pull > 8 ? { transform: `translateY(${Math.min(pull * 0.35, 40)}px)`, transition: 'none' } : undefined}>{body}</div>
       {stub && data && (
         <StubView data={data} stub={stub} onClose={() => setStub(null)} say={say}
           canEmail={data.role === 'owner'}
@@ -264,7 +293,7 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => <button key={d} onClick={() => press(String(d))}>{d}</button>)}
         <button style={{ visibility: 'hidden' }} />
         <button onClick={() => press('0')}>0</button>
-        <button onClick={() => setP(p.slice(0, -1))} style={{ fontSize: 18 }}>⌫</button>
+        <button className="pin-del" onClick={() => setP(p.slice(0, -1))}><Delete size={28} /></button>
       </div>
     </div>
   )
@@ -384,12 +413,16 @@ function OwnerApp({ data, mutate, say, openStub }) {
       {tab === 'entries' && (
         <Entries data={data} issues={issues} onFix={setFixKey} />
       )}
+      {tab === 'paystubs' && (
+        <PaystubsPage data={data} openStub={openStub} mutate={mutate} say={say} />
+      )}
       {tab === 'rates' && <Rates data={data} mutate={mutate} say={say} />}
       {tab === 'team' && <Team data={data} onEdit={setEditEmp} />}
 
       <div className="tabbar no-print">
         <TabBtn icon={<Home size={20} />} label="Home" on={tab === 'home'} onClick={() => nav('home')} />
         <TabBtn icon={<ListChecks size={20} />} label="Entries" on={tab === 'entries'} onClick={() => nav('entries')} badge={issues.length} />
+        <TabBtn icon={<FileText size={20} />} label="Paystubs" on={tab === 'paystubs'} onClick={() => nav('paystubs')} />
         <TabBtn icon={<SlidersHorizontal size={20} />} label="Rates" on={tab === 'rates'} onClick={() => nav('rates')} />
         <TabBtn icon={<Users size={20} />} label="Team" on={tab === 'team'} onClick={() => nav('team')} />
       </div>
@@ -501,6 +534,45 @@ function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount,
 
       <div className="section-title">Leaderboard · season</div>
       <div className="card"><Leaderboard rows={(data.leaderboard || {}).season || []} photos={data.photos} /></div>
+    </>
+  )
+}
+
+function PaystubsPage({ data, openStub, mutate, say }) {
+  const [person, setPerson] = useState('All')
+  const names = ['All', ...Array.from(new Set([
+    ...data.employees.filter((e) => e.inPayroll && e.active).map((e) => e.name),
+    ...data.payments.map((p) => p.employee),
+  ]))]
+  const rows = data.payments
+    .filter((p) => person === 'All' || p.employee === person)
+    .slice()
+    .sort((a, b) => (a.recorded < b.recorded ? 1 : a.recorded > b.recorded ? -1 : 0))
+  const remove = async (p) => {
+    if (!window.confirm(`Delete this ${$(p.amount)} payment to ${first(p.employee)}? Their balance will go back up.`)) return
+    try { await mutate({ action: 'deletePayment', id: p.id }); say('Payment deleted') } catch (e) { say(e.message) }
+  }
+  return (
+    <>
+      <div className="chiprow">
+        {names.map((n) => <button key={n} className={'chip' + (person === n ? ' on' : '')} onClick={() => setPerson(n)}>{n === 'All' ? 'All' : first(n)}</button>)}
+      </div>
+      <div className="card">
+        {rows.length === 0 && <div className="muted center" style={{ padding: 16 }}>No paystubs yet{person !== 'All' ? ` for ${first(person)}` : ''}.</div>}
+        {rows.map((p) => (
+          <div key={p.id} className="list-item">
+            <button className="btn-block" style={{ textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center', flex: 1, minWidth: 0 }}
+              onClick={() => openStub({ employee: p.employee, periodStart: p.periodStart, periodEnd: p.periodEnd, paymentId: p.id })}>
+              <Avatar name={p.employee} photo={(data.photos || {})[p.employee]} size={38} />
+              <div className="li-main">
+                <div className="li-title">{first(p.employee)} · {$(p.amount)} · {p.method}</div>
+                <div className="li-sub">{fdate(p.periodStart)} – {fdate(p.periodEnd)} · recorded {fdate(p.recorded)}{p.note ? ` · ${p.note.slice(0, 34)}` : ''}</div>
+              </div>
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => remove(p)} aria-label="Delete payment"><Trash2 size={15} color="var(--red)" /></button>
+          </div>
+        ))}
+      </div>
     </>
   )
 }

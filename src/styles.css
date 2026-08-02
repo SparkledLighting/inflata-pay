@@ -198,3 +198,6 @@ input, select, textarea { font-family: inherit; font-size: 16px; }
 .login-wrap .pinpad { width: min(232px, 64vw); gap: 10px; }
 .login-wrap .pinpad button { font-size: 22px; }
 .spin-icon { animation: sp 1s linear infinite; }
+
+.pinpad button.pin-del { background: transparent; box-shadow: none; color: var(--ink-soft); }
+.pinpad button.pin-del:active { background: transparent; transform: scale(.9); }
