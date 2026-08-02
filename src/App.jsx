@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Home, ListChecks, SlidersHorizontal, Users, LogOut, AlertTriangle, Printer,
-  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User
+  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User, Camera
 } from 'lucide-react'
 import logo from './assets/logo.png'
 
@@ -883,14 +883,14 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
   return (
     <Modal onClose={onClose} title={isNew ? 'Add team member' : 'Edit ' + first(emp.name)}>
       <div className="center" style={{ marginBottom: 10 }}>
-        <Avatar name={f.name || '?'} photo={f.photo} size={72} />
-        <div>
-          <label className="btn btn-ghost btn-sm" style={{ marginTop: 8, display: 'inline-flex' }}>
-            Change photo
+        <span className="avatar-wrap">
+          <Avatar name={f.name || '?'} photo={f.photo} size={80} />
+          <label className="avatar-badge">
+            <Camera size={14} />
             <input type="file" accept="image/*" style={{ display: 'none' }}
               onChange={async (e) => { const file = e.target.files[0]; if (file) setF({ ...f, photo: await fileToDataUrl(file) }) }} />
           </label>
-        </div>
+        </span>
       </div>
       <div className="field"><label>Full name (exactly as in the Form)</label><input value={f.name} disabled={!isNew} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
       <div className="grid2">
@@ -1006,14 +1006,14 @@ function ProfileTab({ data, saveSelf, say }) {
       <div className="section-title">Your profile</div>
       <div className="card">
         <div className="center" style={{ marginBottom: 14 }}>
-          <Avatar name={data.me.name} photo={f.photo != null ? f.photo : data.me.photo} size={84} />
-          <div>
-            <label className="btn btn-ghost btn-sm" style={{ marginTop: 10, display: 'inline-flex' }}>
-              Change photo
+          <span className="avatar-wrap">
+            <Avatar name={data.me.name} photo={f.photo != null ? f.photo : data.me.photo} size={92} />
+            <label className="avatar-badge">
+              <Camera size={15} />
               <input type="file" accept="image/*" style={{ display: 'none' }}
                 onChange={async (e) => { const file = e.target.files[0]; if (file) setF({ ...f, photo: await fileToDataUrl(file) }) }} />
             </label>
-          </div>
+          </span>
         </div>
         <div className="field"><label>Name</label><input value={data.me.name} disabled /></div>
         <div className="field"><label>Email (paystubs go here)</label>
