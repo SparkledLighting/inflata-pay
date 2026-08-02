@@ -41,7 +41,8 @@ var TAB = { RATES: 'IP_RATES', EMP: 'IP_EMPLOYEES', PAY: 'IP_PAYMENTS', FIX: 'IP
 function doGet(e) {
   return handle_(function () {
     ensureSetup_();
-    var emp = auth_((e.parameter || {}).pin);
+    var P = e.parameter || {};
+    var emp = auth_(P.user, P.pin);
     return buildPayload_(emp);
   });
 }
@@ -50,7 +51,7 @@ function doPost(e) {
   return handle_(function () {
     ensureSetup_();
     var body = JSON.parse(e.postData.contents || '{}');
-    var emp = auth_(body.pin);
+    var emp = auth_(body.user, body.pin);
     var isOwner = emp.role === 'owner';
     var a = body.action;
 
@@ -90,12 +91,28 @@ function handle_(fn) {
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function auth_(pin) {
+function auth_(user, pin) {
   pin = String(pin || '').trim();
-  if (!pin) throw new Error('PIN required');
-  var emp = readEmployees_().find(function (x) { return x.pin === pin && x.active; });
-  if (!emp) throw new Error('Invalid PIN');
+  user = String(user || '').trim().toLowerCase();
+  if (!user || !pin) throw new Error('Email/phone and PIN required');
+  throttleCheck_();
+  var uphone = user.replace(/\D/g, '').slice(-10);
+  var emp = readEmployees_().find(function (x) {
+    if (!x.active || x.pin !== pin) return false;
+    var em = (x.email || '').trim().toLowerCase();
+    var ph = (x.phone || '').replace(/\D/g, '').slice(-10);
+    return (em && em === user) || (uphone.length === 10 && ph === uphone);
+  });
+  if (!emp) { throttleHit_(); throw new Error('No match for that email/phone + PIN'); }
   return emp;
+}
+function throttleCheck_() {
+  var c = Number(CacheService.getScriptCache().get('authfail') || 0);
+  if (c >= 15) throw new Error('Too many failed attempts — try again in about 10 minutes');
+}
+function throttleHit_() {
+  var cache = CacheService.getScriptCache();
+  cache.put('authfail', String(Number(cache.get('authfail') || 0) + 1), 600);
 }
 function requireOwner_(ok) { if (!ok) throw new Error('Owner only'); }
 
@@ -267,8 +284,10 @@ function priceAll_() {
     if (o.exclude) return;
     var unit = o.unit || r.unit;
     var comp = (o.comp != null ? o.comp : r.comp) || '';
+    var rowCat = unit ? classify_(unit) : '';
     var push = function (person, kind, label, amount, qty, flags) {
-      items.push({ key: r.key, tsMs: r.tsMs, date: r.date, person: person, kind: kind, label: label, amount: round2_(amount), qty: qty || 1, unit: unit || '', comp: comp, notes: r.notes, flags: flags || [] });
+      var cat = (kind === 'clean' || kind === 'roll') ? rowCat : kind.toUpperCase();
+      items.push({ key: r.key, tsMs: r.tsMs, date: r.date, person: person, kind: kind, cat: cat, label: label, amount: round2_(amount), qty: qty || 1, unit: unit || '', comp: comp, notes: r.notes, flags: flags || [] });
     };
     var flagPerson = function (p, ctx) {
       if (p && !names[p]) issues.push({ key: r.key, date: r.date, type: 'unknown-person', detail: ctx + ': "' + p + '" is not in your Team list' });
@@ -360,6 +379,7 @@ function buildPayload_(emp) {
   var lb = leaderboard_(priced.items);
   var base = {
     role: emp.role,
+    labels: priced.rates.labels,
     me: { name: emp.name, email: emp.email },
     leaderboard: lb,
     serverTime: fmtDate_(new Date()),
@@ -458,6 +478,12 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
   var pay = paymentId ? payments.find(function (p) { return p.id === paymentId; }) : null;
   var sum = summarize_(priced.items, payments, name);
 
+  var groups = summaryGroups_(mine, priced.rates.labels);
+  var sumRows = groups.map(function (g) {
+    return '<tr><td style="padding:5px 10px;border-bottom:1px solid #eef2f7;color:#0a1424">' + esc_(g.label) +
+      '</td><td style="padding:5px 10px;border-bottom:1px solid #eef2f7;text-align:center;color:#334054">' + g.qty +
+      '</td><td style="padding:5px 10px;border-bottom:1px solid #eef2f7;text-align:right;font-weight:600;color:#0a1424">$' + g.amt.toFixed(2) + '</td></tr>';
+  }).join('');
   var rows = mine.map(function (i) {
     return '<tr><td style="padding:6px 10px;border-bottom:1px solid #eef2f7;color:#334054;white-space:nowrap">' + i.date +
       '</td><td style="padding:6px 10px;border-bottom:1px solid #eef2f7;color:#0a1424">' + esc_(i.label) +
@@ -474,6 +500,12 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
     '<td><div style="color:#6b7890;font-size:12px">PAID TO</div><div style="font-weight:700;color:#0a1424">' + esc_(name) + '</div></td>' +
     '<td style="text-align:right"><div style="color:#6b7890;font-size:12px">PERIOD</div><div style="font-weight:700;color:#0a1424">' + periodStart + ' → ' + periodEnd + '</div></td>' +
     '</tr></table>' +
+    '<div style="font-weight:800;color:#0a1424;font-size:13px;margin:4px 0 6px">WORK SUMMARY</div>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">' +
+    '<tr style="background:#f4f6fb"><th style="text-align:left;padding:7px 10px;color:#6b7890;font-size:11px">TYPE</th><th style="padding:7px 10px;color:#6b7890;font-size:11px">QTY</th><th style="text-align:right;padding:7px 10px;color:#6b7890;font-size:11px">AMOUNT</th></tr>' +
+    sumRows +
+    '</table>' +
+    '<div style="font-weight:800;color:#0a1424;font-size:13px;margin:4px 0 6px">DETAIL</div>' +
     '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
     '<tr style="background:#f4f6fb"><th style="text-align:left;padding:8px 10px;color:#6b7890;font-size:11px">DATE</th><th style="text-align:left;padding:8px 10px;color:#6b7890;font-size:11px">WORK</th><th style="text-align:right;padding:8px 10px;color:#6b7890;font-size:11px">AMOUNT</th></tr>' +
     rows +
@@ -486,6 +518,25 @@ function emailPaystub_(name, periodStart, periodEnd, paymentId) {
     '</div></div>';
 
   GmailApp.sendEmail(emp.email, 'InflataPalooza Earnings Statement · ' + periodStart + ' → ' + periodEnd, 'Your earnings statement is attached (HTML email).', { htmlBody: html, name: 'InflataPalooza' });
+}
+
+function summaryGroups_(items, labels) {
+  var g = {};
+  var add = function (key, label, order, qty, amt) {
+    if (!g[key]) g[key] = { label: label, order: order, qty: 0, amt: 0 };
+    g[key].qty += qty; g[key].amt += amt;
+  };
+  items.forEach(function (i) {
+    if (i.kind === 'clean') add('c:' + i.cat, 'Cleaned — ' + (labels[i.cat] || i.cat), 10, 1, i.amount);
+    else if (i.kind === 'roll') add('roll', 'Rolled', 20, 1, i.amount);
+    else if (i.kind === 'delivery') add('del', 'Delivery setup/takedowns', 30, i.qty, i.amount);
+    else if (i.kind === 'pickup') add('pu', 'Customer pickups/returns', 40, i.qty, i.amount);
+    else if (i.kind === 'hourly') add('hr', 'Hourly work', 50, i.qty, i.amount);
+    else add('flat', 'One-offs & adjustments', 60, 1, i.amount);
+  });
+  return Object.keys(g).map(function (k) { return g[k]; })
+    .sort(function (a, b) { return a.order - b.order || (a.label < b.label ? -1 : 1); })
+    .map(function (x) { return { label: x.label, qty: x.qty, amt: round2_(x.amt) }; });
 }
 
 function esc_(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

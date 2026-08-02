@@ -5,8 +5,12 @@ import {
 } from 'lucide-react'
 
 /* ------------------------------ helpers ------------------------------ */
+const DEFAULT_SERVER = 'https://script.google.com/macros/s/AKfycbysEbLQPeC4JQPJV00QJfftF88hlooBay0VaHrU-bPYMzutHyIwxjRTb4n0K26MwquB/exec'
 const LS_SERVER = 'ip_server'
 const LS_PIN = 'ip_pin'
+const LS_USER = 'ip_user'
+const qsServer = new URLSearchParams(window.location.search).get('server')
+if (qsServer) localStorage.setItem(LS_SERVER, qsServer)
 const $ = (n) => '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fdate = (iso) => {
   if (!iso) return ''
@@ -29,8 +33,8 @@ const clientSum = (data, name) => {
   return { earned: r2(earned), paid: r2(paid), owed: r2(earned - paid) }
 }
 
-async function apiGet(server, pin) {
-  const res = await fetch(`${server}?pin=${encodeURIComponent(pin)}`, { redirect: 'follow' })
+async function apiGet(server, user, pin) {
+  const res = await fetch(`${server}?user=${encodeURIComponent(user)}&pin=${encodeURIComponent(pin)}`, { redirect: 'follow' })
   const j = await res.json()
   if (!j.ok) throw new Error(j.error || 'Request failed')
   return j.data
@@ -48,7 +52,8 @@ async function apiPost(server, body) {
 
 /* ------------------------------ root app ------------------------------ */
 export default function App() {
-  const [server, setServer] = useState(() => localStorage.getItem(LS_SERVER) || '')
+  const [server, setServer] = useState(() => localStorage.getItem(LS_SERVER) || DEFAULT_SERVER)
+  const [user, setUser] = useState(() => localStorage.getItem(LS_USER) || '')
   const [pin, setPin] = useState(() => localStorage.getItem(LS_PIN) || '')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -58,32 +63,34 @@ export default function App() {
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(''), 2400) }
 
-  const load = async (p = pin, s = server) => {
-    if (!s || !p) return
+  const load = async (p = pin, u = user, s = server) => {
+    if (!s || !p || !u) return
     setLoading(true); setError('')
     try {
-      const d = await apiGet(s, p)
+      const d = await apiGet(s, u, p)
       setData(d)
       localStorage.setItem(LS_PIN, p)
+      localStorage.setItem(LS_USER, u)
     } catch (e) {
-      if (/Invalid PIN/i.test(e.message)) { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
+      if (/No match|Email\/phone/i.test(e.message)) { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
       setError(e.message)
     } finally { setLoading(false) }
   }
-  useEffect(() => { if (server && pin && !data) load() }, []) // eslint-disable-line
+  useEffect(() => { if (server && pin && user && !data) load() }, []) // eslint-disable-line
 
   const mutate = async (body) => {
-    const d = await apiPost(server, { pin, ...body })
+    const d = await apiPost(server, { user, pin, ...body })
     setData(d)
     return d
   }
 
   const logout = () => { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
-  const disconnect = () => { localStorage.removeItem(LS_SERVER); localStorage.removeItem(LS_PIN); setServer(''); setPin(''); setData(null) }
+  const switchUser = () => { localStorage.removeItem(LS_PIN); localStorage.removeItem(LS_USER); setPin(''); setUser(''); setData(null) }
 
   let body
   if (!server) body = <Connect onSave={(u) => { localStorage.setItem(LS_SERVER, u); setServer(u) }} />
-  else if (!data) body = <Login loading={loading} error={error} onSubmit={(p) => { setPin(p); load(p) }} />
+  else if (!data) body = <Login loading={loading} error={error} savedUser={user} onSwitchUser={switchUser}
+    onSubmit={(u, p) => { setUser(u); setPin(p); load(p, u) }} />
   else if (data.role === 'owner') body = <OwnerApp data={data} mutate={mutate} reload={() => load()} say={say} openStub={setStub} />
   else body = <EmployeeApp data={data} say={say} openStub={setStub} reload={() => load()} />
 
@@ -97,14 +104,14 @@ export default function App() {
             <button className="btn btn-ghost btn-sm" onClick={logout} aria-label="Log out"><LogOut size={16} /></button>
           </div>
         )}
-        {!data && server && <button className="btn btn-ghost btn-sm" onClick={disconnect}>Change server</button>}
+
       </div>
       <div className="main">{body}</div>
       {stub && data && (
         <StubView data={data} stub={stub} onClose={() => setStub(null)} say={say}
           canEmail={data.role === 'owner'}
           onEmail={async () => {
-            await apiPost(server, { pin, action: 'emailPaystub', employee: stub.employee, periodStart: stub.periodStart, periodEnd: stub.periodEnd, paymentId: stub.paymentId })
+            await apiPost(server, { user, pin, action: 'emailPaystub', employee: stub.employee, periodStart: stub.periodStart, periodEnd: stub.periodEnd, paymentId: stub.paymentId })
             say('Emailed to ' + first(stub.employee))
           }} />
       )}
@@ -136,17 +143,39 @@ function Connect({ onSave }) {
   )
 }
 
-function Login({ onSubmit, loading, error }) {
+function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
+  const [who, setWho] = useState(savedUser || '')
+  const [stage, setStage] = useState(savedUser ? 'pin' : 'who')
   const [p, setP] = useState('')
   const [shake, setShake] = useState(false)
   useEffect(() => { if (error) { setShake(true); setP(''); setTimeout(() => setShake(false), 450) } }, [error])
-  useEffect(() => { if (p.length === 4) onSubmit(p) }, [p]) // eslint-disable-line
+  useEffect(() => { if (p.length === 4) onSubmit(who.trim(), p) }, [p]) // eslint-disable-line
   const press = (d) => { if (p.length < 4 && !loading) setP(p + d) }
+  const whoOk = who.includes('@') ? /.+@.+\..+/.test(who) : who.replace(/\D/g, '').length >= 10
+
+  if (stage === 'who') return (
+    <div className="mt20">
+      <div className="center"><div style={{ fontSize: 40 }}>🎪</div>
+        <h2 style={{ fontWeight: 800, marginTop: 6 }}>Welcome to InflataPay</h2>
+        <div className="muted mt8">Sign in with the email or cell number on file</div>
+      </div>
+      <div className="card mt14">
+        <div className="field"><label>Email or phone</label>
+          <input autoFocus autoCapitalize="none" autoCorrect="off" inputMode="email" placeholder="you@email.com or 801-555-1234"
+            value={who} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
+        </div>
+        <button className="btn btn-primary btn-block" disabled={!whoOk} onClick={() => setStage('pin')}>Continue</button>
+      </div>
+    </div>
+  )
+
   return (
     <div className="center mt20">
       <div style={{ fontSize: 40 }}>🎪</div>
       <h2 style={{ fontWeight: 800, marginTop: 6 }}>Enter your PIN</h2>
-      <div className="muted mt8">{loading ? 'Checking…' : error ? <span className="err">{error}</span> : 'Your 4-digit code'}</div>
+      <div className="muted mt8">
+        {loading ? 'Checking…' : error ? <span className="err">{error}</span> : <>as <b>{who}</b> · <button style={{ color: 'var(--blue)', fontWeight: 700 }} onClick={() => { setStage('who'); setP(''); onSwitchUser && onSwitchUser() }}>switch</button></>}
+      </div>
       <div className={'pindots' + (shake ? ' shake' : '')}>
         {[0, 1, 2, 3].map((i) => <div key={i} className={'pindot' + (p.length > i ? ' on' : '')} />)}
       </div>
@@ -155,6 +184,49 @@ function Login({ onSubmit, loading, error }) {
         <button style={{ visibility: 'hidden' }} />
         <button onClick={() => press('0')}>0</button>
         <button onClick={() => setP(p.slice(0, -1))} style={{ fontSize: 18 }}>⌫</button>
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------ work summary ------------------------------ */
+function summaryGroups(items, labels) {
+  const g = {}
+  const add = (key, label, order, qty, amt) => {
+    if (!g[key]) g[key] = { label, order, qty: 0, amt: 0 }
+    g[key].qty += qty; g[key].amt += amt
+  }
+  items.forEach((i) => {
+    if (i.kind === 'clean') add('c:' + i.cat, 'Cleaned — ' + ((labels || {})[i.cat] || i.cat), 10, 1, i.amount)
+    else if (i.kind === 'roll') add('roll', 'Rolled', 20, 1, i.amount)
+    else if (i.kind === 'delivery') add('del', 'Delivery setup/takedowns', 30, i.qty, i.amount)
+    else if (i.kind === 'pickup') add('pu', 'Customer pickups/returns', 40, i.qty, i.amount)
+    else if (i.kind === 'hourly') add('hr', 'Hourly work', 50, i.qty, i.amount)
+    else add('flat', 'One-offs & adjustments', 60, 1, i.amount)
+  })
+  return Object.values(g).sort((a, b) => a.order - b.order || (a.label < b.label ? -1 : 1))
+    .map((x) => ({ ...x, amt: r2(x.amt) }))
+}
+
+function WorkSummary({ items, labels, title }) {
+  const groups = summaryGroups(items, labels)
+  const total = r2(items.reduce((s, i) => s + i.amount, 0))
+  if (!groups.length) return null
+  return (
+    <div className="card">
+      {title && <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>{title}</div>}
+      {groups.map((gr) => (
+        <div className="list-item" key={gr.label} style={{ padding: '7px 2px' }}>
+          <div className="li-main"><div className="li-title" style={{ fontSize: 14 }}>{gr.label}</div></div>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'baseline' }}>
+            <span className="li-sub" style={{ minWidth: 28, textAlign: 'right' }}>×{gr.qty}</span>
+            <span className="li-amt" style={{ minWidth: 70, textAlign: 'right' }}>{$(gr.amt)}</span>
+          </div>
+        </div>
+      ))}
+      <div className="list-item" style={{ padding: '9px 2px', borderTop: '1.5px solid var(--hairline)' }}>
+        <div className="li-title">Total</div>
+        <div className="li-amt" style={{ color: 'var(--blue)', fontSize: 16 }}>{$(total)}</div>
       </div>
     </div>
   )
@@ -360,6 +432,8 @@ function Entries({ data, issues, onFix }) {
         </div>
       )}
 
+      <WorkSummary items={rows} labels={data.labels} title={(person === 'All' ? 'Everyone' : first(person)) + ' — work summary'} />
+
       <div className="card">
         <div className="row" style={{ marginBottom: 6 }}>
           <div className="muted">{rows.length} entries</div>
@@ -551,6 +625,16 @@ function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
               <div><div className="li-sub">PAID TO</div><div style={{ fontWeight: 800 }}>{employee}</div></div>
               <div style={{ textAlign: 'right' }}><div className="li-sub">PERIOD</div><div style={{ fontWeight: 800 }}>{fdate(periodStart)} – {fdate(periodEnd)}</div></div>
             </div>
+            <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: '.5px', color: 'var(--faint)', margin: '2px 0 6px' }}>WORK SUMMARY</div>
+            <table style={{ marginBottom: 14 }}>
+              <thead><tr><th>TYPE</th><th className="tr">QTY</th><th className="tr">AMOUNT</th></tr></thead>
+              <tbody>
+                {summaryGroups(items, data.labels).map((gr) => (
+                  <tr key={gr.label}><td>{gr.label}</td><td className="tr">{gr.qty}</td><td className="tr" style={{ fontWeight: 600 }}>{$(gr.amt)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: '.5px', color: 'var(--faint)', margin: '2px 0 6px' }}>DETAIL</div>
             <table>
               <thead><tr><th>DATE</th><th>WORK</th><th className="tr">AMT</th></tr></thead>
               <tbody>
@@ -711,6 +795,7 @@ function EmployeeApp({ data, say, openStub }) {
             {[['season', 'Season'], ['30d', '30 days'], ['7d', '7 days']].map(([k, l]) =>
               <button key={k} className={'chip' + (win === k ? ' on' : '')} onClick={() => setWin(k)}>{l}</button>)}
           </div>
+          <WorkSummary items={items} labels={data.labels} title="Work summary" />
           <div className="card">
             <div className="row" style={{ marginBottom: 6 }}>
               <div className="muted">{items.length} entries</div>
