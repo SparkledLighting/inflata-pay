@@ -170,3 +170,14 @@ input, select, textarea { font-family: inherit; font-size: 16px; }
 .avatar { border-radius: 50%; object-fit: cover; background: #e3f1f8; color: var(--blue-ink); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; flex: 0 0 auto; }
 .brand { flex-direction: column; align-items: flex-start; gap: 0; }
 .brand .sub { margin-left: 3px; font-size: 9.5px; letter-spacing: .8px; }
+
+.login-wrap {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  top: calc(env(safe-area-inset-top) + 54px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  overflow: hidden; background: var(--bg); z-index: 30;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.login-wrap .pinpad { max-width: 280px; gap: 10px; }
+.login-wrap .pinpad button { padding: 14px 0; font-size: 22px; }
+html, body { overscroll-behavior-y: none; }

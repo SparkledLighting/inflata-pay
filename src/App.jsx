@@ -114,7 +114,7 @@ export default function App() {
     const t0 = Date.now()
     try {
       const d = await apiGet(server, user, pin)
-      if (lastActionRef.current < t0) setData(d)
+      if (lastActionRef.current < t0 && localStorage.getItem(LS_PIN)) setData(d)
     } catch { /* quiet — next tick will retry */ }
   }
   useEffect(() => {
@@ -134,8 +134,8 @@ export default function App() {
     return d
   }
 
-  const logout = () => { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
-  const switchUser = () => { localStorage.removeItem(LS_PIN); localStorage.removeItem(LS_USER); setPin(''); setUser(''); setData(null) }
+  const logout = () => { lastActionRef.current = Date.now(); localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
+  const switchUser = () => { lastActionRef.current = Date.now(); localStorage.removeItem(LS_PIN); localStorage.removeItem(LS_USER); setPin(''); setUser(''); setData(null) }
 
   let body
   if (!server) body = <Connect onSave={(u) => { localStorage.setItem(LS_SERVER, u); setServer(u) }} />
@@ -173,8 +173,8 @@ export default function App() {
 
 function Splash() {
   return (
-    <div className="center" style={{ paddingTop: '18dvh' }}>
-      <img src={logo} alt="InflataPalooza" style={{ width: 220, maxWidth: '72%' }} />
+    <div className="login-wrap center">
+      <img src={logo} alt="InflataPalooza" style={{ width: 200, maxWidth: '68%' }} />
       <div className="spin" />
     </div>
   )
@@ -211,35 +211,46 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
   useEffect(() => { if (error) { setShake(true); setP(''); setTimeout(() => setShake(false), 450) } }, [error])
   useEffect(() => { if (p.length === 4) onSubmit(who.trim(), p) }, [p]) // eslint-disable-line
   const press = (d) => { if (p.length < 4 && !loading) setP(p + d) }
-  const whoOk = who.includes('@') ? /.+@.+\..+/.test(who) : who.replace(/\D/g, '').length >= 10
+  const [useEmail, setUseEmail] = useState(false)
+  const whoOk = useEmail ? /.+@.+\..+/.test(who) : who.replace(/\D/g, '').length >= 10
 
   if (stage === 'who') return (
-    <div className="mt20">
-      <div className="center"><img src={logo} alt="InflataPalooza" style={{ width: 230, maxWidth: '78%' }} />
+    <div className="login-wrap">
+      <div className="center"><img src={logo} alt="InflataPalooza" style={{ width: 190, maxWidth: '68%' }} />
         <h2 style={{ fontWeight: 800, marginTop: 10 }}>Welcome to InflataPay</h2>
-        <div className="muted mt8">Sign in with the email or cell number on file</div>
+        <div className="muted mt8">{useEmail ? 'Sign in with your email' : 'Sign in with your cell number'}</div>
       </div>
-      <div className="card mt14">
-        <div className="field"><label>Email or phone</label>
-          <input autoFocus autoCapitalize="none" autoCorrect="off" inputMode="email" placeholder="you@email.com or 801-555-1234"
-            value={who} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
+      <div className="card mt14" style={{ width: 'min(360px, 92%)' }}>
+        <div className="field"><label>{useEmail ? 'Email' : 'Cell number'}</label>
+          {useEmail ? (
+            <input autoFocus autoCapitalize="none" autoCorrect="off" type="email" inputMode="email" placeholder="you@email.com"
+              value={who} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
+          ) : (
+            <input autoFocus type="tel" inputMode="numeric" autoComplete="tel" placeholder="801-555-1234"
+              value={who} onChange={(e) => setWho(e.target.value.replace(/[^\d\-() +]/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
+          )}
         </div>
         <button className="btn btn-primary btn-block" disabled={!whoOk} onClick={() => setStage('pin')}>Continue</button>
+        <div className="center mt8">
+          <button className="muted" style={{ fontSize: 12.5, textDecoration: 'underline' }} onClick={() => { setUseEmail(!useEmail); setWho('') }}>
+            {useEmail ? 'use phone instead' : 'use email instead'}
+          </button>
+        </div>
       </div>
     </div>
   )
 
   return (
-    <div className="center mt20">
-      <img src={logo} alt="InflataPalooza" style={{ width: 200, maxWidth: '72%' }} />
-      <h2 style={{ fontWeight: 800, marginTop: 10 }}>Enter your PIN</h2>
+    <div className="login-wrap center">
+      <img src={logo} alt="InflataPalooza" style={{ width: 150, maxWidth: '58%' }} />
+      <h2 style={{ fontWeight: 800, marginTop: 8, fontSize: 20 }}>Enter your PIN</h2>
       <div className="muted mt8">
         {loading ? 'Checking…' : error ? <span className="err">{error}</span> : <>as <b>{who}</b> · <button style={{ color: 'var(--blue)', fontWeight: 700 }} onClick={() => { setStage('who'); setP(''); onSwitchUser && onSwitchUser() }}>switch</button></>}
       </div>
-      <div className={'pindots' + (shake ? ' shake' : '')}>
+      <div className={'pindots' + (shake ? ' shake' : '')} style={{ marginTop: 18 }}>
         {[0, 1, 2, 3].map((i) => <div key={i} className={'pindot' + (p.length > i ? ' on' : '')} />)}
       </div>
-      <div className="pinpad">
+      <div className="pinpad" style={{ marginTop: 16 }}>
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => <button key={d} onClick={() => press(String(d))}>{d}</button>)}
         <button style={{ visibility: 'hidden' }} />
         <button onClick={() => press('0')}>0</button>
