@@ -27,6 +27,12 @@ const addDays = (iso, n) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 const first = (name) => String(name || '').split(' ')[0]
+const fmtPhone = (v) => {
+  const d = String(v || '').replace(/\D/g, '').slice(0, 10)
+  if (d.length > 6) return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`
+  if (d.length > 3) return `${d.slice(0, 3)}-${d.slice(3)}`
+  return d
+}
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100
 const clientSum = (data, name) => {
   const earned = data.items.filter((i) => i.person === name).reduce((s, i) => s + i.amount, 0)
@@ -80,16 +86,21 @@ export default function App() {
   const [stub, setStub] = useState(null) // {employee, periodStart, periodEnd, paymentId?}
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(''), 2400) }
+  const lastActionRef = useRef(0)
 
-  const load = async (p = pin, u = user, s = server) => {
+  const load = async (p = pin, u = user, s = server, opts = {}) => {
     if (!s || !p || !u) return
+    const t0 = Date.now()
     setLoading(true); setError('')
     try {
       const d = await apiGet(s, u, p)
+      if (lastActionRef.current > t0) return // logged out / switched mid-flight — discard
       setData(d)
       localStorage.setItem(LS_PIN, p)
       localStorage.setItem(LS_USER, u)
+      if (opts.toast) say('Updated')
     } catch (e) {
+      if (lastActionRef.current > t0) return
       if (/No match|Email\/phone/i.test(e.message)) { localStorage.removeItem(LS_PIN); setPin(''); setData(null) }
       setError(e.message)
     } finally { setLoading(false); setBooting(false) }
@@ -100,7 +111,6 @@ export default function App() {
     else setBooting(false)
   }, []) // eslint-disable-line
 
-  const lastActionRef = useRef(0)
   const mutate = async (body) => {
     lastActionRef.current = Date.now()
     const d = await apiPost(server, { user, pin, ...body })
@@ -151,7 +161,7 @@ export default function App() {
         <div className="brand"><span className="logo">InflataPay</span><span className="sub">by INFLATAPALOOZA</span></div>
         {data && (
           <div style={{ display: 'flex', gap: 6 }}>
-            <button className="btn btn-ghost btn-sm" onClick={() => load()} aria-label="Refresh"><RefreshCw size={16} /></button>
+            <button className="btn btn-ghost btn-sm" onClick={() => load(pin, user, server, { toast: true })} aria-label="Refresh"><RefreshCw size={16} className={loading ? 'spin-icon' : ''} /></button>
             <button className="btn btn-ghost btn-sm" onClick={logout} aria-label="Log out"><LogOut size={16} /></button>
           </div>
         )}
@@ -174,7 +184,7 @@ export default function App() {
 function Splash() {
   return (
     <div className="login-wrap center">
-      <img src={logo} alt="InflataPalooza" style={{ width: 200, maxWidth: '68%' }} />
+      <img src={logo} alt="InflataPalooza" style={{ width: 170, maxWidth: '60%' }} />
       <div className="spin" />
     </div>
   )
@@ -216,7 +226,7 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
 
   if (stage === 'who') return (
     <div className="login-wrap">
-      <div className="center"><img src={logo} alt="InflataPalooza" style={{ width: 190, maxWidth: '68%' }} />
+      <div className="center"><img src={logo} alt="InflataPalooza" style={{ width: 165, maxWidth: '60%' }} />
         <h2 style={{ fontWeight: 800, marginTop: 10 }}>Welcome to InflataPay</h2>
         <div className="muted mt8">{useEmail ? 'Sign in with your email' : 'Sign in with your cell number'}</div>
       </div>
@@ -227,7 +237,7 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
               value={who} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
           ) : (
             <input autoFocus type="tel" inputMode="numeric" autoComplete="tel" placeholder="801-555-1234"
-              value={who} onChange={(e) => setWho(e.target.value.replace(/[^\d\-() +]/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
+              value={who} onChange={(e) => setWho(fmtPhone(e.target.value))} onKeyDown={(e) => { if (e.key === 'Enter' && whoOk) setStage('pin') }} />
           )}
         </div>
         <button className="btn btn-primary btn-block" disabled={!whoOk} onClick={() => setStage('pin')}>Continue</button>
@@ -242,7 +252,7 @@ function Login({ onSubmit, loading, error, savedUser, onSwitchUser }) {
 
   return (
     <div className="login-wrap center">
-      <img src={logo} alt="InflataPalooza" style={{ width: 150, maxWidth: '58%' }} />
+      <img src={logo} alt="InflataPalooza" style={{ width: 128, maxWidth: '50%' }} />
       <h2 style={{ fontWeight: 800, marginTop: 8, fontSize: 20 }}>Enter your PIN</h2>
       <div className="muted mt8">
         {loading ? 'Checking…' : error ? <span className="err">{error}</span> : <>as <b>{who}</b> · <button style={{ color: 'var(--blue)', fontWeight: 700 }} onClick={() => { setStage('who'); setP(''); onSwitchUser && onSwitchUser() }}>switch</button></>}
@@ -899,7 +909,7 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
           <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="employee">employee</option><option value="owner">owner</option></select></div>
       </div>
       <div className="field"><label>Email (for paystubs)</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
-      <div className="field"><label>Phone</label><input type="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+      <div className="field"><label>Phone</label><input type="tel" inputMode="numeric" placeholder="801-555-1234" value={f.phone} onChange={(e) => setF({ ...f, phone: fmtPhone(e.target.value) })} /></div>
       <ToggleRow label="Active (can log in)" on={f.active !== false} set={(v) => setF({ ...f, active: v })} />
       <ToggleRow label="Include in payroll totals" on={f.inPayroll !== false} set={(v) => setF({ ...f, inPayroll: v })} />
       <button className="btn btn-primary btn-block mt8" disabled={busy} onClick={save}>Save</button>
@@ -1019,7 +1029,7 @@ function ProfileTab({ data, saveSelf, say }) {
         <div className="field"><label>Email (paystubs go here)</label>
           <input type="email" autoCapitalize="none" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
         <div className="field"><label>Phone</label>
-          <input type="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+          <input type="tel" inputMode="numeric" placeholder="801-555-1234" value={f.phone} onChange={(e) => setF({ ...f, phone: fmtPhone(e.target.value) })} /></div>
         <div className="field"><label>New PIN (leave blank to keep current)</label>
           <input inputMode="numeric" maxLength={4} placeholder="••••" value={f.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} /></div>
         <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>Save changes</button>
