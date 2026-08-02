@@ -22,6 +22,12 @@ const addDays = (iso, n) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 const first = (name) => String(name || '').split(' ')[0]
+const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100
+const clientSum = (data, name) => {
+  const earned = data.items.filter((i) => i.person === name).reduce((s, i) => s + i.amount, 0)
+  const paid = (data.payments || []).filter((p) => p.employee === name).reduce((s, p) => s + p.amount, 0)
+  return { earned: r2(earned), paid: r2(paid), owed: r2(earned - paid) }
+}
 
 async function apiGet(server, pin) {
   const res = await fetch(`${server}?pin=${encodeURIComponent(pin)}`, { redirect: 'follow' })
@@ -276,6 +282,31 @@ function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount,
         )
       })}
 
+      {data.employees.filter((e) => e.active && !e.inPayroll).length > 0 && (
+        <>
+          <div className="section-title">Tracked · not in payroll</div>
+          {data.employees.filter((e) => e.active && !e.inPayroll).map((e) => {
+            const mine = data.items.filter((i) => i.person === e.name)
+            const earned = mine.reduce((s, i) => s + i.amount, 0)
+            const cleans = mine.filter((i) => i.kind === 'clean' && !i.flags.includes('nopay')).length
+            const rolls = mine.filter((i) => i.kind === 'roll' && !i.flags.includes('nopay')).length
+            const dels = mine.filter((i) => i.kind === 'delivery').reduce((s, i) => s + i.qty, 0)
+            const sp = suggestPeriod(e.name)
+            return (
+              <div className="card" key={e.name}>
+                <div className="row">
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 16 }}>{e.name} <span className="tag tag-teal">tracked</span></div>
+                    <div className="muted" style={{ fontSize: 12.5 }}>{cleans} cleans · {rolls} rolls{dels ? ` · ${dels} deliveries` : ''} · season value {$(earned)}</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => openStub({ employee: e.name, periodStart: sp.start, periodEnd: sp.end })}><FileText size={15} /> Statement</button>
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
+
       <div className="section-title">Leaderboard · season</div>
       <div className="card"><Leaderboard rows={(data.leaderboard || {}).season || []} /></div>
     </>
@@ -494,7 +525,7 @@ function StubView({ data, stub, onClose, canEmail, onEmail, say }) {
     .sort((a, b) => (a.date < b.date ? -1 : 1))
   const total = items.reduce((s, i) => s + i.amount, 0)
   const payment = paymentId ? data.payments.find((p) => p.id === paymentId) : null
-  const sum = data.role === 'owner' ? data.summaries[employee] : data.summary
+  const sum = data.role === 'owner' ? (data.summaries[employee] || clientSum(data, employee)) : data.summary
   const [busy, setBusy] = useState(false)
 
   const shareText = () => {
