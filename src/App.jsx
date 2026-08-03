@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Home, ListChecks, SlidersHorizontal, Users, LogOut, AlertTriangle, Printer,
-  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User, Camera, Delete
+  Mail, Share2, X, Trophy, Wallet, Trash2, Pencil, RefreshCw, ChevronRight, ChevronDown, FileText, User, Camera, Delete, Eye, EyeOff, Landmark
 } from 'lucide-react'
 import logo from './assets/logo.png'
 
@@ -185,7 +185,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="topbar no-print">
-        <div className="brand"><span className="logo">InflataPay</span><span className="sub">by INFLATAPALOOZA</span></div>
+        <div className="brand"><span className="logo">InflataPay</span><span className="sub">INFLATAPALOOZA</span></div>
         {data && (
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => load(pin, user, server, { toast: true })} aria-label="Refresh"><RefreshCw size={16} className={loading ? 'spin-icon' : ''} /></button>
@@ -381,6 +381,7 @@ function WorkSummary({ items, labels, title }) {
 /* ------------------------------ owner ------------------------------ */
 function OwnerApp({ data, mutate, say, openStub }) {
   const [tab, setTab] = useState('home')
+  const [fundOpen, setFundOpen] = useState(false)
   const nav = (t) => { if (t !== tab) { history.pushState({ tab: t }, ''); setTab(t) } }
   useEffect(() => {
     const h = (e) => { const st = e.state || {}; if (st.tab) setTab(st.tab); else if (st.base) setTab('home') }
@@ -411,7 +412,7 @@ function OwnerApp({ data, mutate, say, openStub }) {
     <>
       {tab === 'home' && (
         <OwnerHome data={data} payroll={payroll} onPay={setPayFor} suggestPeriod={suggestPeriod} openStub={openStub}
-          issuesCount={issues.length} goIssues={() => nav('entries')} />
+          issuesCount={issues.length} goIssues={() => nav('entries')} onFund={() => setFundOpen(true)} />
       )}
       {tab === 'entries' && (
         <Entries data={data} issues={issues} onFix={setFixKey} />
@@ -442,6 +443,9 @@ function OwnerApp({ data, mutate, say, openStub }) {
       {editEmp && (
         <EmployeeModal emp={editEmp} mutate={mutate} say={say} onClose={() => setEditEmp(null)} />
       )}
+      {fundOpen && (
+        <FundModal bank={data.bank} mutate={mutate} say={say} onClose={() => setFundOpen(false)} />
+      )}
     </>
   )
 }
@@ -455,8 +459,11 @@ function TabBtn({ icon, label, on, onClick, badge }) {
   )
 }
 
-function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount, goIssues }) {
+function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount, goIssues, onFund }) {
   const totalOwed = payroll.reduce((s, e) => s + ((data.summaries[e.name] || {}).owed || 0), 0)
+  const bank = data.bank || {}
+  const hasFund = bank.fund != null
+  const delta = hasFund ? r2(bank.fund - totalOwed) : null
   return (
     <>
       <div className="hero">
@@ -464,6 +471,27 @@ function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount,
         <div className="big">{$(totalOwed)}</div>
         <div className="small">Pull up your bank, send the ACH, then record it here — the paystub is one tap away.</div>
       </div>
+
+      <button className="card tap btn-block" style={{ textAlign: 'left' }} onClick={onFund}>
+        <div className="row">
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <Landmark size={20} color="var(--blue)" />
+            <div>
+              <div className="li-sub" style={{ fontWeight: 700, letterSpacing: '.4px' }}>PAYROLL FUND</div>
+              <div style={{ fontWeight: 800, fontSize: 19 }}>{hasFund ? $(bank.fund) : 'Set balance'}</div>
+              <div className="li-sub">{bank.live ? 'live from bank' : hasFund && bank.asOf ? `as of ${fdate(bank.asOf)} · tap to update` : 'tap to enter what you\u2019ve set aside'}</div>
+            </div>
+          </div>
+          {hasFund && (
+            <div style={{ textAlign: 'right' }}>
+              <span className={'tag ' + (delta >= 0 ? 'tag-teal' : 'tag-red')} style={{ fontSize: 12, padding: '4px 10px' }}>
+                {delta >= 0 ? `+${$(delta)} cushion` : `${$(delta)} short`}
+              </span>
+              <div className="li-sub" style={{ marginTop: 4 }}>vs {$(totalOwed)} owed</div>
+            </div>
+          )}
+        </div>
+      </button>
 
       {issuesCount > 0 && (
         <button className="card tap btn-block" style={{ textAlign: 'left' }} onClick={goIssues}>
@@ -577,6 +605,30 @@ function PaystubsPage({ data, openStub, mutate, say }) {
         ))}
       </div>
     </>
+  )
+}
+
+function FundModal({ bank, mutate, say, onClose }) {
+  const [v, setV] = useState(bank && bank.fund != null ? String(bank.fund) : '')
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    setBusy(true)
+    try { await mutate({ action: 'saveSetting', key: 'payrollFund', value: Number(v) || 0 }); say('Fund balance saved'); history.back() }
+    catch (e) { say(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <Modal onClose={onClose} title="Payroll fund balance">
+      {bank && bank.live ? (
+        <div className="muted" style={{ marginBottom: 12 }}>This balance is syncing live from your bank, so there's nothing to enter — the number updates itself (refreshed every few minutes).</div>
+      ) : (
+        <>
+          <div className="muted" style={{ marginBottom: 12 }}>Enter what's currently sitting in your Relay payroll account. Only you can see this. The app never touches the money — this is a dashboard number, nothing more.</div>
+          <div className="field"><label>Current balance</label>
+            <input type="number" inputMode="decimal" placeholder="0.00" value={v} onChange={(e) => setV(e.target.value)} autoFocus /></div>
+          <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>Save</button>
+        </>
+      )}
+    </Modal>
   )
 }
 
@@ -943,8 +995,7 @@ function Team({ data, onEdit }) {
               </div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div className="li-sub">PIN</div>
-              <div style={{ fontWeight: 800, letterSpacing: 2 }}>{e.pin}</div>
+              {e.hasPin ? <span className="tag tag-teal">PIN set</span> : <span className="tag tag-gold">no PIN yet</span>}
             </div>
           </div>
         </button>
@@ -959,8 +1010,13 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
   const [f, setF] = useState({ ...emp })
   const [busy, setBusy] = useState(false)
   const isNew = !emp.name
+  const resetPin = async () => {
+    if (!window.confirm(`Reset ${first(f.name)}'s PIN? They'll create a new one the next time they log in — let them know before they try.`)) return
+    setBusy(true)
+    try { await mutate({ action: 'resetPin', name: f.name }); say('PIN cleared') } catch (e) { say(e.message) } finally { setBusy(false) }
+  }
   const save = async () => {
-    if (!f.name.trim() || !/^\d{4}$/.test(String(f.pin))) { say('Need a name and a 4-digit PIN'); return }
+    if (!f.name.trim()) { say('Need a name'); return }
     setBusy(true)
     try { await mutate({ action: 'saveEmployee', employee: f }); say('Saved'); history.back() }
     catch (e) { say(e.message) } finally { setBusy(false) }
@@ -978,15 +1034,22 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
         </span>
       </div>
       <div className="field"><label>Full name (exactly as in the Form)</label><input value={f.name} disabled={!isNew} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
-      <div className="grid2">
-        <div className="field"><label>PIN (4 digits)</label><input inputMode="numeric" maxLength={4} value={f.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} /></div>
-        <div className="field"><label>Role</label>
-          <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="employee">employee</option><option value="owner">owner</option></select></div>
-      </div>
+      <div className="field"><label>Role</label>
+        <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="employee">employee</option><option value="owner">owner</option></select></div>
       <div className="field"><label>Email (for paystubs)</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
       <div className="field"><label>Phone</label><input type="tel" inputMode="numeric" placeholder="801-555-1234" value={f.phone} onChange={(e) => setF({ ...f, phone: fmtPhone(e.target.value) })} /></div>
       <ToggleRow label="Active (can log in)" on={f.active !== false} set={(v) => setF({ ...f, active: v })} />
       <ToggleRow label="Include in payroll totals" on={f.inPayroll !== false} set={(v) => setF({ ...f, inPayroll: v })} />
+      {!isNew && (
+        <div className="row" style={{ padding: '8px 0' }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14.5 }}>Login PIN</div>
+            <div className="li-sub">{f.hasPin ? 'Set (only they can see it)' : 'Not set — they\u2019ll create one at first login'}</div>
+          </div>
+          {f.hasPin && <button className="btn btn-danger btn-sm" disabled={busy} onClick={resetPin}>Reset PIN</button>}
+        </div>
+      )}
+      {isNew && <div className="muted" style={{ marginBottom: 10 }}>No PIN needed — they'll create their own the first time they log in with this phone number.</div>}
       <button className="btn btn-primary btn-block mt8" disabled={busy} onClick={save}>Save</button>
     </Modal>
   )
@@ -1078,6 +1141,7 @@ function EmployeeApp({ data, say, openStub, saveSelf }) {
 function ProfileTab({ data, saveSelf, say }) {
   const [f, setF] = useState({ email: data.me.email || '', phone: data.me.phone || '', pin: '' })
   const [busy, setBusy] = useState(false)
+  const [showPin, setShowPin] = useState(false)
   const save = async () => {
     if (f.pin && !/^\d{4}$/.test(f.pin)) { say('PIN must be 4 digits'); return }
     setBusy(true)
@@ -1105,6 +1169,13 @@ function ProfileTab({ data, saveSelf, say }) {
           <input type="email" autoCapitalize="none" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
         <div className="field"><label>Phone</label>
           <input type="tel" inputMode="numeric" placeholder="801-555-1234" value={f.phone} onChange={(e) => setF({ ...f, phone: fmtPhone(e.target.value) })} /></div>
+        <div className="row" style={{ padding: '2px 0 12px' }}>
+          <div>
+            <div className="li-sub" style={{ fontWeight: 700 }}>YOUR PIN</div>
+            <div style={{ fontWeight: 800, letterSpacing: 4, fontSize: 18 }}>{showPin ? data.me.pin : '••••'}</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowPin(!showPin)}>{showPin ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+        </div>
         <div className="field"><label>New PIN (leave blank to keep current)</label>
           <input inputMode="numeric" maxLength={4} placeholder="••••" value={f.pin} onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} /></div>
         <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>Save changes</button>

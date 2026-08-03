@@ -35,7 +35,7 @@ var SEED = {
   ],
 };
 
-var TAB = { RATES: 'IP_RATES', EMP: 'IP_EMPLOYEES', PAY: 'IP_PAYMENTS', FIX: 'IP_FIXUPS' };
+var TAB = { RATES: 'IP_RATES', EMP: 'IP_EMPLOYEES', PAY: 'IP_PAYMENTS', FIX: 'IP_FIXUPS', SET: 'IP_SETTINGS' };
 
 // ======================= HTTP ENTRYPOINTS =======================
 function doGet(e) {
@@ -79,6 +79,17 @@ function doPost(e) {
       emailPaystub_(body.employee, body.periodStart, body.periodEnd, body.paymentId);
     } else if (a === 'saveSelf') {
       saveSelf_(emp, body.profile || {});
+    } else if (a === 'saveSetting') {
+      requireOwner_(isOwner);
+      if (body.key !== 'payrollFund') throw new Error('Unknown setting');
+      setSetting_('payrollFund', Number(body.value) || 0);
+      setSetting_('payrollFundAsOf', fmtDate_(new Date()));
+      CacheService.getScriptCache().remove('bankbal');
+    } else if (a === 'resetPin') {
+      requireOwner_(isOwner);
+      var target = readEmployees_().find(function (x) { return x.name === String(body.name); });
+      if (!target) throw new Error('Employee not found');
+      sheet_(TAB.EMP).getRange(target.row, 3).setValue('');
     } else if (a !== 'ping') {
       throw new Error('Unknown action: ' + a);
     }
@@ -99,14 +110,25 @@ function auth_(user, pin) {
   user = String(user || '').trim().toLowerCase();
   if (!user || !pin) throw new Error('Email/phone and PIN required');
   throttleCheck_();
+  if (!/^\d{4}$/.test(pin)) { throttleHit_(); throw new Error('PIN must be 4 digits'); }
   var uphone = user.replace(/\D/g, '').slice(-10);
-  var emp = readEmployees_().find(function (x) {
-    if (!x.active || x.pin !== pin) return false;
+  var emps = readEmployees_();
+  var emp = emps.find(function (x) {
+    if (!x.active) return false;
     var em = (x.email || '').trim().toLowerCase();
     var ph = (x.phone || '').replace(/\D/g, '').slice(-10);
     return (em && em === user) || (uphone.length === 10 && ph === uphone);
   });
   if (!emp) { throttleHit_(); throw new Error('No match for that email/phone + PIN'); }
+  if (!emp.pin) {
+    // PIN was reset — the first valid PIN entered becomes their new PIN
+    var clash = emps.find(function (x) { return x.pin === pin && x.name !== emp.name; });
+    if (clash) throw new Error('That PIN is taken — choose a different one');
+    sheet_(TAB.EMP).getRange(emp.row, 3).setValue(pin);
+    emp.pin = pin;
+    return emp;
+  }
+  if (emp.pin !== pin) { throttleHit_(); throw new Error('No match for that email/phone + PIN'); }
   return emp;
 }
 function throttleCheck_() {
@@ -128,6 +150,7 @@ function ensureSetup_() {
   if (String(empSh.getRange(1, 8).getValue()) !== 'Photo') empSh.getRange(1, 8).setValue('Photo');
   ensureTab_(ss, TAB.PAY, ['ID', 'DateRecorded', 'Employee', 'Amount', 'PeriodStart', 'PeriodEnd', 'Method', 'Note']);
   ensureTab_(ss, TAB.FIX, ['RowKey', 'OverrideJSON', 'Note', 'TimestampMs']);
+  ensureTab_(ss, TAB.SET, ['Key', 'Value']);
 
   var props = PropertiesService.getScriptProperties();
   if (props.getProperty('seeded') === '1') return;
@@ -247,6 +270,56 @@ function readPayments_() {
   return sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues().map(function (r) {
     return { id: String(r[0]), recorded: r[1] instanceof Date ? fmtDate_(r[1]) : String(r[1]), employee: String(r[2]).trim(), amount: Number(r[3]) || 0, periodStart: r[4] instanceof Date ? fmtDate_(r[4]) : String(r[4]), periodEnd: r[5] instanceof Date ? fmtDate_(r[5]) : String(r[5]), method: String(r[6]), note: String(r[7]) };
   }).filter(function (p) { return p.id; });
+}
+
+function getSetting_(key) {
+  var sh = sheet_(TAB.SET);
+  if (!sh || sh.getLastRow() < 2) return '';
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  for (var i = 0; i < vals.length; i++) if (String(vals[i][0]) === key) return String(vals[i][1]);
+  return '';
+}
+function setSetting_(key, value) {
+  var sh = sheet_(TAB.SET);
+  var last = sh.getLastRow();
+  if (last > 1) {
+    var vals = sh.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < vals.length; i++) if (String(vals[i][0]) === key) { sh.getRange(i + 2, 2).setValue(value); return; }
+  }
+  sh.appendRow([key, value]);
+}
+
+function bankBalance_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('bankbal');
+  if (hit) { try { return JSON.parse(hit); } catch (e) {} }
+  var props = PropertiesService.getScriptProperties();
+  var url = props.getProperty('RELAY_BALANCE_URL');
+  var out = null;
+  if (url) {
+    try {
+      var headers = {};
+      var key = props.getProperty('RELAY_API_KEY');
+      var hname = props.getProperty('RELAY_AUTH_HEADER') || 'Authorization';
+      var hpre = props.getProperty('RELAY_AUTH_PREFIX'); if (hpre == null) hpre = 'Bearer ';
+      if (key) headers[hname] = hpre + key;
+      var res = UrlFetchApp.fetch(url, { headers: headers, muteHttpExceptions: true });
+      if (res.getResponseCode() < 300) {
+        var j = JSON.parse(res.getContentText());
+        var path = (props.getProperty('RELAY_BALANCE_PATH') || 'balance').split('.');
+        var v = j;
+        for (var i = 0; i < path.length; i++) { if (v == null) break; v = v[path[i]]; }
+        var num = Number(v);
+        if (isFinite(num)) out = { fund: num, asOf: fmtDate_(new Date()), live: true };
+      }
+    } catch (e) {}
+  }
+  if (!out) {
+    var f = Number(getSetting_('payrollFund'));
+    out = { fund: isFinite(f) && getSetting_('payrollFund') !== '' ? f : null, asOf: getSetting_('payrollFundAsOf') || '', live: false };
+  }
+  cache.put('bankbal', JSON.stringify(out), 300);
+  return out;
 }
 
 function readFixups_() {
@@ -388,7 +461,7 @@ function buildPayload_(emp) {
     role: emp.role,
     labels: priced.rates.labels,
     photos: photos,
-    me: { name: emp.name, email: emp.email, phone: emp.phone, photo: emp.photo || '' },
+    me: { name: emp.name, email: emp.email, phone: emp.phone, photo: emp.photo || '', pin: emp.pin },
     leaderboard: lb,
     serverTime: fmtDate_(new Date()),
   };
@@ -397,7 +470,10 @@ function buildPayload_(emp) {
     priced.items.forEach(function (i) { if (i.unit) units[i.unit] = classify_(i.unit); });
     base.items = priced.items;
     base.payments = payments;
-    base.employees = priced.employees;
+    base.bank = bankBalance_();
+    base.employees = priced.employees.map(function (e) {
+      return { name: e.name, role: e.role, email: e.email, phone: e.phone, active: e.active, inPayroll: e.inPayroll, photo: e.photo, hasPin: !!e.pin };
+    });
     base.rates = priced.rates;
     base.fixups = readFixups_();
     base.issues = priced.issues;
@@ -444,11 +520,14 @@ function saveRates_(cats, special) {
 function saveEmployee_(e) {
   var sh = sheet_(TAB.EMP);
   var emps = readEmployees_();
-  var pinClash = emps.find(function (x) { return x.pin === String(e.pin) && x.name !== e.name; });
-  if (e.pin && pinClash) throw new Error('That PIN is already used by ' + pinClash.name);
   var hit = emps.find(function (x) { return x.name === e.name; });
+  var pin = e.pin != null && String(e.pin).trim() !== '' ? String(e.pin).trim() : (hit ? hit.pin : '');
+  if (e.pin) {
+    var pinClash = emps.find(function (x) { return x.pin === String(e.pin) && x.name !== e.name; });
+    if (pinClash) throw new Error('That PIN is already used by ' + pinClash.name);
+  }
   var photo = e.photo != null ? String(e.photo) : (hit ? hit.photo : '');
-  var row = [e.name, e.role || 'employee', String(e.pin || ''), e.email || '', e.phone || '', e.active !== false, e.inPayroll !== false, photo];
+  var row = [e.name, e.role || 'employee', pin, e.email || '', e.phone || '', e.active !== false, e.inPayroll !== false, photo];
   if (hit) sh.getRange(hit.row, 1, 1, 8).setValues([row]);
   else sh.appendRow(row);
 }

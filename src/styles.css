@@ -201,3 +201,7 @@ input, select, textarea { font-family: inherit; font-size: 16px; }
 
 .pinpad button.pin-del { background: transparent; box-shadow: none; color: var(--ink-soft); }
 .pinpad button.pin-del:active { background: transparent; transform: scale(.9); }
+
+.brand { gap: 0; }
+.brand .logo { line-height: 1.05; }
+.brand .sub { margin-top: -1px; margin-left: 2px; }
