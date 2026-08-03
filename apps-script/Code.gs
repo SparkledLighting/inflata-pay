@@ -85,6 +85,18 @@ function doPost(e) {
       setSetting_('payrollFund', Number(body.value) || 0);
       setSetting_('payrollFundAsOf', fmtDate_(new Date()));
       CacheService.getScriptCache().remove('bankbal');
+    } else if (a === 'plaidLinkToken') {
+      requireOwner_(isOwner);
+      var _lt = plaidCreateLinkToken_();
+    } else if (a === 'plaidExchange') {
+      requireOwner_(isOwner);
+      plaidExchange_(String(body.public_token || ''));
+    } else if (a === 'plaidSync') {
+      requireOwner_(isOwner);
+      CacheService.getScriptCache().remove('bankbal');
+    } else if (a === 'plaidDisconnect') {
+      requireOwner_(isOwner);
+      plaidDisconnect_();
     } else if (a === 'resetPin') {
       requireOwner_(isOwner);
       var target = readEmployees_().find(function (x) { return x.name === String(body.name); });
@@ -94,7 +106,9 @@ function doPost(e) {
       throw new Error('Unknown action: ' + a);
     }
     emp = readEmployees_().find(function (x) { return x.name === emp.name; }) || emp;
-    return buildPayload_(emp);
+    var pl = buildPayload_(emp);
+    if (typeof _lt !== 'undefined') pl.linkToken = _lt;
+    return pl;
   });
 }
 
@@ -289,14 +303,76 @@ function setSetting_(key, value) {
   sh.appendRow([key, value]);
 }
 
+function plaidProps_() {
+  var p = PropertiesService.getScriptProperties();
+  return {
+    id: p.getProperty('PLAID_CLIENT_ID'), secret: p.getProperty('PLAID_SECRET'),
+    env: (p.getProperty('PLAID_ENV') || 'sandbox').toLowerCase(),
+    access: p.getProperty('PLAID_ACCESS_TOKEN'), accountId: p.getProperty('PLAID_ACCOUNT_ID'),
+    accountName: p.getProperty('PLAID_ACCOUNT_NAME'), redirect: p.getProperty('PLAID_REDIRECT_URI'),
+  };
+}
+function plaidReq_(path, body) {
+  var pp = plaidProps_();
+  body.client_id = pp.id; body.secret = pp.secret;
+  var res = UrlFetchApp.fetch('https://' + pp.env + '.plaid.com' + path, {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify(body), muteHttpExceptions: true,
+  });
+  var j = {};
+  try { j = JSON.parse(res.getContentText()); } catch (e) {}
+  if (res.getResponseCode() >= 300) throw new Error('Plaid: ' + (j.error_message || j.error_code || ('HTTP ' + res.getResponseCode())));
+  return j;
+}
+function plaidCreateLinkToken_() {
+  var pp = plaidProps_();
+  if (!pp.id || !pp.secret) throw new Error('Plaid keys not set — add PLAID_CLIENT_ID and PLAID_SECRET in Script properties first');
+  var body = { client_name: 'InflataPay', language: 'en', country_codes: ['US'], user: { client_user_id: 'ip-owner' }, products: ['auth'] };
+  if (pp.redirect) body.redirect_uri = pp.redirect;
+  return plaidReq_('/link/token/create', body).link_token;
+}
+function plaidExchange_(publicToken) {
+  var ex = plaidReq_('/item/public_token/exchange', { public_token: publicToken });
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('PLAID_ACCESS_TOKEN', ex.access_token);
+  var acc = plaidReq_('/accounts/get', { access_token: ex.access_token }).accounts || [];
+  var pick = acc.find(function (a) { return /payroll/i.test(a.name || '') || /payroll/i.test(a.official_name || ''); })
+    || acc.find(function (a) { return a.type === 'depository'; }) || acc[0];
+  if (pick) {
+    props.setProperty('PLAID_ACCOUNT_ID', pick.account_id);
+    props.setProperty('PLAID_ACCOUNT_NAME', (pick.name || 'Account') + (pick.mask ? ' ••' + pick.mask : ''));
+  }
+  CacheService.getScriptCache().remove('bankbal');
+}
+function plaidDisconnect_() {
+  var pp = plaidProps_();
+  if (pp.access) { try { plaidReq_('/item/remove', { access_token: pp.access }); } catch (e) {} }
+  var props = PropertiesService.getScriptProperties();
+  props.deleteProperty('PLAID_ACCESS_TOKEN'); props.deleteProperty('PLAID_ACCOUNT_ID'); props.deleteProperty('PLAID_ACCOUNT_NAME');
+  CacheService.getScriptCache().remove('bankbal');
+}
+function plaidFetchBalance_() {
+  var pp = plaidProps_();
+  var j = plaidReq_('/accounts/get', { access_token: pp.access });
+  var acc = (j.accounts || []).find(function (a) { return a.account_id === pp.accountId; }) || (j.accounts || [])[0];
+  if (!acc) throw new Error('Plaid: no accounts on item');
+  var b = acc.balances || {};
+  var v = b.available != null ? b.available : b.current;
+  return { fund: Number(v), asOf: fmtDate_(new Date()), asOfTs: Date.now(), live: true, source: 'plaid', account: pp.accountName || acc.name || '' };
+}
+
 function bankBalance_() {
   var cache = CacheService.getScriptCache();
   var hit = cache.get('bankbal');
   if (hit) { try { return JSON.parse(hit); } catch (e) {} }
   var props = PropertiesService.getScriptProperties();
-  var url = props.getProperty('RELAY_BALANCE_URL');
+  var pp = plaidProps_();
   var out = null;
-  if (url) {
+  if (pp.access) {
+    try { out = plaidFetchBalance_(); }
+    catch (e) { out = null; var perr = String(e.message || e); }
+  }
+  var url = props.getProperty('RELAY_BALANCE_URL');
+  if (!out && url) {
     try {
       var headers = {};
       var key = props.getProperty('RELAY_API_KEY');
@@ -316,9 +392,12 @@ function bankBalance_() {
   }
   if (!out) {
     var f = Number(getSetting_('payrollFund'));
-    out = { fund: isFinite(f) && getSetting_('payrollFund') !== '' ? f : null, asOf: getSetting_('payrollFundAsOf') || '', live: false };
+    out = { fund: isFinite(f) && getSetting_('payrollFund') !== '' ? f : null, asOf: getSetting_('payrollFundAsOf') || '', live: false, source: 'manual' };
+    if (typeof perr !== 'undefined') out.error = perr;
   }
-  cache.put('bankbal', JSON.stringify(out), 300);
+  out.plaidReady = !!(pp.id && pp.secret);
+  out.plaidConnected = !!pp.access;
+  cache.put('bankbal', JSON.stringify(out), 21600);
   return out;
 }
 

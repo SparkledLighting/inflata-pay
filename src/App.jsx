@@ -479,7 +479,7 @@ function OwnerHome({ data, payroll, onPay, suggestPeriod, openStub, issuesCount,
             <div>
               <div className="li-sub" style={{ fontWeight: 700, letterSpacing: '.4px' }}>PAYROLL FUND</div>
               <div style={{ fontWeight: 800, fontSize: 19 }}>{hasFund ? $(bank.fund) : 'Set balance'}</div>
-              <div className="li-sub">{bank.live ? 'live from bank' : hasFund && bank.asOf ? `as of ${fdate(bank.asOf)} · tap to update` : 'tap to enter what you\u2019ve set aside'}</div>
+              <div className="li-sub">{bank.live ? `live · ${bank.account || 'bank'} · synced ${bank.asOf ? fdate(bank.asOf) : 'today'}` : hasFund && bank.asOf ? `as of ${fdate(bank.asOf)} · tap to update` : 'tap to enter what you\u2019ve set aside'}</div>
             </div>
           </div>
           {hasFund && (
@@ -609,23 +609,68 @@ function PaystubsPage({ data, openStub, mutate, say }) {
 }
 
 function FundModal({ bank, mutate, say, onClose }) {
-  const [v, setV] = useState(bank && bank.fund != null ? String(bank.fund) : '')
+  const b = bank || {}
+  const [v, setV] = useState(b.fund != null && !b.live ? String(b.fund) : '')
   const [busy, setBusy] = useState(false)
   const save = async () => {
     setBusy(true)
     try { await mutate({ action: 'saveSetting', key: 'payrollFund', value: Number(v) || 0 }); say('Fund balance saved'); history.back() }
     catch (e) { say(e.message) } finally { setBusy(false) }
   }
+  const connect = async () => {
+    setBusy(true)
+    try {
+      const d = await mutate({ action: 'plaidLinkToken' })
+      if (!d.linkToken) throw new Error('No link token returned')
+      if (!window.Plaid) throw new Error('Plaid Link failed to load — check your connection and retry')
+      setBusy(false)
+      window.Plaid.create({
+        token: d.linkToken,
+        onSuccess: async (public_token) => {
+          try { await mutate({ action: 'plaidExchange', public_token }); say('Bank connected 🎉') }
+          catch (e) { say(e.message) }
+        },
+        onExit: () => {},
+      }).open()
+    } catch (e) { say(e.message); setBusy(false) }
+  }
+  const syncNow = async () => {
+    setBusy(true)
+    try { await mutate({ action: 'plaidSync' }); say('Synced') } catch (e) { say(e.message) } finally { setBusy(false) }
+  }
+  const disconnect = async () => {
+    if (!window.confirm('Disconnect the bank? The card will go back to manual entry.')) return
+    setBusy(true)
+    try { await mutate({ action: 'plaidDisconnect' }); say('Bank disconnected') } catch (e) { say(e.message) } finally { setBusy(false) }
+  }
   return (
-    <Modal onClose={onClose} title="Payroll fund balance">
-      {bank && bank.live ? (
-        <div className="muted" style={{ marginBottom: 12 }}>This balance is syncing live from your bank, so there's nothing to enter — the number updates itself (refreshed every few minutes).</div>
+    <Modal onClose={onClose} title="Payroll fund">
+      {b.plaidConnected ? (
+        <>
+          <div className="muted" style={{ marginBottom: 6 }}>Synced read-only from <b>{b.account || 'your bank'}</b> via Plaid. The app can only see the balance — it can't move money, ever.</div>
+          {b.error && <div className="err" style={{ marginBottom: 8 }}>Last sync issue: {b.error}</div>}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button className="btn btn-primary" style={{ flex: 1 }} disabled={busy} onClick={syncNow}><RefreshCw size={15} /> Sync now</button>
+            <button className="btn btn-danger btn-sm" disabled={busy} onClick={disconnect}>Disconnect</button>
+          </div>
+          <div className="muted mt8" style={{ fontSize: 12 }}>Auto-refreshes about every 6 hours; Sync now pulls fresh immediately. Kept intentionally infrequent because bank pulls can be billable on Plaid.</div>
+        </>
+      ) : b.plaidReady ? (
+        <>
+          <div className="muted" style={{ marginBottom: 12 }}>Your Plaid keys are in place. Connect your Relay account (read-only) and this card goes live — pick the <b>payroll</b> account when Plaid asks which to share.</div>
+          <button className="btn btn-primary btn-block" disabled={busy} onClick={connect}><Landmark size={16} /> Connect bank account</button>
+          <div className="section-title" style={{ margin: '16px 4px 6px' }}>Or keep it manual</div>
+          <div className="field"><label>Current balance</label>
+            <input type="number" inputMode="decimal" placeholder="0.00" value={v} onChange={(e) => setV(e.target.value)} /></div>
+          <button className="btn btn-ghost btn-block" disabled={busy} onClick={save}>Save manual balance</button>
+        </>
       ) : (
         <>
           <div className="muted" style={{ marginBottom: 12 }}>Enter what's currently sitting in your Relay payroll account. Only you can see this. The app never touches the money — this is a dashboard number, nothing more.</div>
           <div className="field"><label>Current balance</label>
             <input type="number" inputMode="decimal" placeholder="0.00" value={v} onChange={(e) => setV(e.target.value)} autoFocus /></div>
           <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>Save</button>
+          <div className="muted mt8" style={{ fontSize: 12 }}>Want it live? Create a free Plaid account, then add PLAID_CLIENT_ID, PLAID_SECRET, and PLAID_ENV in Apps Script → Project Settings → Script properties — a Connect button appears here automatically.</div>
         </>
       )}
     </Modal>
@@ -1017,6 +1062,7 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
   }
   const save = async () => {
     if (!f.name.trim()) { say('Need a name'); return }
+    if (f.pin && !/^\d{4}$/.test(String(f.pin))) { say('PIN must be exactly 4 digits (or blank)'); return }
     setBusy(true)
     try { await mutate({ action: 'saveEmployee', employee: f }); say('Saved'); history.back() }
     catch (e) { say(e.message) } finally { setBusy(false) }
@@ -1034,8 +1080,15 @@ function EmployeeModal({ emp, mutate, say, onClose }) {
         </span>
       </div>
       <div className="field"><label>Full name (exactly as in the Form)</label><input value={f.name} disabled={!isNew} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
-      <div className="field"><label>Role</label>
-        <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="employee">employee</option><option value="owner">owner</option></select></div>
+      <div className="grid2">
+        <div className="field"><label>Role</label>
+          <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="employee">employee</option><option value="owner">owner</option></select></div>
+        <div className="field"><label>PIN</label>
+          <input inputMode="numeric" maxLength={4} placeholder={f.hasPin ? '••••' : 'set 4-digit PIN'} value={f.pin || ''}
+            onChange={(e) => setF({ ...f, pin: e.target.value.replace(/\D/g, '') })} />
+        </div>
+      </div>
+      <div className="muted" style={{ marginTop: -6, marginBottom: 10, fontSize: 12 }}>Leave blank to keep their current PIN. Type 4 digits to set a new one — they can always change it themselves in Profile.</div>
       <div className="field"><label>Email (for paystubs)</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
       <div className="field"><label>Phone</label><input type="tel" inputMode="numeric" placeholder="801-555-1234" value={f.phone} onChange={(e) => setF({ ...f, phone: fmtPhone(e.target.value) })} /></div>
       <ToggleRow label="Active (can log in)" on={f.active !== false} set={(v) => setF({ ...f, active: v })} />
